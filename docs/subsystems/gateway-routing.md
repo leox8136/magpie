@@ -404,6 +404,13 @@ continues to serialize atomic replacements with its file lock; request
 lookups do not take that writer lock. Each returned identity owns its
 restriction slices and limit value.
 
+Budget reservations, window initialization and settlement use a lock per
+key and usage-log path (`budget.stateFor`). A slow settlement for one key
+leaves another key's warm-window admission available. Log appends remain
+synchronous and serialized by the usage store; a cold window can still wait
+for that store. Settlement and window initialization for the same key retain
+their ordering, so the persisted call enters each cached window once.
+
 `GET /v1/magpie/limit` (`keyLimit` in
 [`key_limit.go`](../../internal/gateway/key_limit.go)) answers the limit of
 the gateway key the request carries (`access.Caller`) and of no other: it
@@ -1040,7 +1047,7 @@ the row of the entry that id reaches, with its label, under the bare id.
 ## Verification
 
 ```sh
-go test -tags nogui -race ./internal/access
+go test -tags nogui -race ./internal/access ./internal/budget
 go test -tags nogui ./internal/access -run '^$' -bench 'BenchmarkAuthenticateKeyCount|BenchmarkKeyUpdateAndReauthentication' -benchmem -count=3
 ```
 

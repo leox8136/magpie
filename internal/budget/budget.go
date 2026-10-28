@@ -87,11 +87,30 @@ type window struct {
 	start int64 // the window's start as Unix seconds
 }
 
-var state = struct {
+// Each key owns its reservation and settlement lock. Disk work for one key
+// must not hold the admission lock of another key with a warm window.
+type keyBudget struct {
 	sync.Mutex
-	sums map[string][]*sums // by usage.Path() and key, one a window its limits count in
+	sums map[string][]*sums
 	held map[window]*held
-}{sums: map[string][]*sums{}, held: map[window]*held{}}
+}
+
+var states = struct {
+	sync.Mutex
+	keys map[string]*keyBudget
+}{keys: map[string]*keyBudget{}}
+
+func stateFor(keyID string) *keyBudget {
+	k := slot(keyID)
+	states.Lock()
+	defer states.Unlock()
+	if s := states.keys[k]; s != nil {
+		return s
+	}
+	s := &keyBudget{sums: map[string][]*sums{}, held: map[window]*held{}}
+	states.keys[k] = s
+	return s
+}
 
 func slot(keyID string) string { return usage.Path() + "\x00" + keyID }
 
@@ -105,7 +124,7 @@ func counts(r usage.Record) bool { return !r.IsRejected() && !r.IsReported() && 
 // are let go. A window two limits share (a day and a week on a Monday,
 // a day and a month on the 1st) is kept once, as Append adds a call to
 // each one kept (#2942). Called with state held.
-func sumsFor(keyID string, starts []time.Time) []*sums {
+func sumsFor(state *keyBudget, keyID string, starts []time.Time) []*sums {
 	k := slot(keyID)
 	kept := state.sums[k]
 	out := make([]*sums, len(starts))
@@ -143,10 +162,9 @@ func read(keyID string, start time.Time) *sums {
 
 // Forget drops what is kept in memory, as a restart would.
 func Forget() {
-	state.Lock()
-	defer state.Unlock()
-	state.sums = map[string][]*sums{}
-	state.held = map[window]*held{}
+	states.Lock()
+	defer states.Unlock()
+	states.keys = map[string]*keyBudget{}
 }
 
 // Append writes rec to usage.jsonl and, for a key's call, counts it
@@ -157,6 +175,7 @@ func Append(rec usage.Record) {
 		usage.Append(rec)
 		return
 	}
+	state := stateFor(rec.CallerKeyID)
 	state.Lock()
 	defer state.Unlock()
 	if rec.Time.IsZero() {
@@ -243,6 +262,7 @@ func All(k access.Key, now time.Time) []Status {
 			s = read(k.ID, start)
 			read1[start.Unix()] = s
 		}
+		state := stateFor(k.ID)
 		state.Lock()
 		h := state.held[window{slot(k.ID), start.Unix()}]
 		out = append(out, status(k.ID, l, s, h, reset))
@@ -348,9 +368,10 @@ func Reserve(who access.Identity, body int64, model string, now time.Time) (rele
 	for i, l := range ls {
 		starts[i], resets[i] = l.Window(now)
 	}
+	state := stateFor(who.KeyID)
 	state.Lock()
 	defer state.Unlock()
-	ss := sumsFor(who.KeyID, starts)
+	ss := sumsFor(state, who.KeyID, starts)
 	heldAt := func(start time.Time) *held { return state.held[window{slot(who.KeyID), start.Unix()}] }
 	// every limit is asked: of those with nothing left, the one that
 	// resets last is the one the client is told, as it is refused until then
