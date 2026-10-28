@@ -209,7 +209,11 @@ function renderGatewayLan() {
   line(t(shown === g.url ? "This computer" : "Public address"), shown);
   if (g.lan) {
     const { urls, sub } = lanShown(g.lanURLs || [], prefs?.lanContainer);
-    urls.filter((u) => u !== shown).forEach((u, i) => line(i ? "" : t("Local network"), u));
+    // an internet address on an interface (an ISP's static one) is said
+    // to be one, not listed as this network's
+    const far = new Set(g.lanPublic || []), rest = urls.filter((u) => u !== shown);
+    rest.filter((u) => !far.has(u)).forEach((u, i) => line(i ? "" : t("Local network"), u));
+    rest.filter((u) => far.has(u)).forEach((u, i) => line(i ? "" : t("On the internet"), u));
     if (!urls.length) list.append(el("div", "gw-url-none", t("This computer has no local network address right now")));
     if (sub) list.append(el("div", "gw-url-none", sub));
   }

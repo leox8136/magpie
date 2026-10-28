@@ -26,10 +26,12 @@ function fixture(lang, theme, events, options = {}) {
   const secrets = new Map([["laptop", "fixture-laptop"], ["server", "fixture-server"], ["work", "fixture-work"]]);
   // options.lanURLs is the test's own list, so it can take the network away
   const lanURLs = options.lanURLs || ["http://192.168.1.10:3999", "http://10.0.0.10:3999"];
+  // options.lanPublic are those of them at an internet address
+  const lanPublic = () => lan && options.lanPublic ? { lanPublic: options.lanPublic } : {};
   // options.publicURL is MAGPIE_PUBLIC_URL's, offered while shared (#1551)
   const publicURL = () => lan && options.publicURL ? { publicURL: options.publicURL } : {};
   const lanState = () => ({ lang, theme, lan,
-    lanURLs: lan ? lanURLs : [], fx: { rate: 7.2, at: new Date().toISOString() },
+    lanURLs: lan ? lanURLs : [], ...lanPublic(), fx: { rate: 7.2, at: new Date().toISOString() },
     ...(options.publicURL ? { gateway: "http://127.0.0.1:3999", ...publicURL() } : {}) });
   const rows = [
     { callerKeyId: "laptop", callerKeyName: "Laptop", in: 100, out: 10, cost: 0.1 },
@@ -58,15 +60,17 @@ function fixture(lang, theme, events, options = {}) {
     const req = route.request(), url = new URL(req.url());
     const json = (data) => route.fulfill({ json: data });
     if (url.pathname === "/boot.js") return route.fulfill({ contentType: "text/javascript", body: `window.bootPrefs = ${JSON.stringify({ lang, theme, web: !!options.web,
-      // with options.publicURL, where this process's gateway listens, as
-      // magpie's boot.js says it, MAGPIE_PUBLIC_URL with it while shared
-      ...(options.publicURL ? { sideGateway: { url: "http://127.0.0.1:3999", running: true, boot: true, ...publicURL() } } : {}) })};` });
+      // with options.publicURL or options.bootGateway, where this process's
+      // gateway listens, as magpie's boot.js says it, and while shared the
+      // addresses other machines use, MAGPIE_PUBLIC_URL with them
+      ...(options.publicURL || options.bootGateway ? { sideGateway: { url: "http://127.0.0.1:3999", running: true, boot: true,
+        ...(lan ? { lan, lanURLs } : {}), ...publicURL() } } : {}) })};` });
     if (url.pathname === "/wails/runtime.js") return route.fulfill({ contentType: "text/javascript", body: "export const Window = {};" });
     if (url.pathname === "/favicon.ico") return route.fulfill({ status: 204 });
     if (url.pathname === "/api/state") return json({ agents: [], profiles: [], settings: { lang, theme } });
     if (url.pathname === "/api/providers") return json({
       providers: [{ id: "relay", name: "Relay", icon: "generic", models: [{ id: "m", name: "Model", on: true }], agents: [] }],
-      gateway: { running: true, window: true, mine: true, url: "http://127.0.0.1:3999", lan, lanURLs: lan ? lanURLs : [], ...publicURL(), calls: [], groups: [] },
+      gateway: { running: true, window: true, mine: true, url: "http://127.0.0.1:3999", lan, lanURLs: lan ? lanURLs : [], ...lanPublic(), ...publicURL(), calls: [], groups: [] },
     });
     if (url.pathname === "/api/groups") return json({ groups: [], models: [] });
     if (url.pathname === "/api/settings/lan") {

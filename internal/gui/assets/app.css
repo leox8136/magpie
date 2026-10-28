@@ -535,7 +535,11 @@ body:not(.side-nav) .side-toggle .st-pane { opacity: 0; }
    window's height WebKit laid the page out at the full width under the
    bar and, on each redraw, 8px narrower for a few frames (@LingYi_Stu on
    X) */
-.view { flex: 1; min-height: 0; overflow-y: scroll; padding: 0 12px 4px; display: flex; flex-direction: column; animation: view-in .24s var(--ease); }
+/* the bar's room comes out of the right padding, so a page's sides stay
+   the same width. Its width depends on the engine and the system, so
+   layout.js measures it into --bar, again on a resize (a text-size zoom
+   comes as one) */
+.view { flex: 1; min-height: 0; overflow-y: scroll; padding: 0 max(0px, calc(12px - var(--bar, 0px))) 4px 12px; display: flex; flex-direction: column; animation: view-in .24s var(--ease); }
 /* a box that scrolls in a page, marked by app.js while it overflows: the
    wheel at its ends stays with it (contain keeps the Mac's bounce on it).
    Only then: Chromium holds the wheel even in a box that doesn't overflow.
@@ -543,13 +547,13 @@ body:not(.side-nav) .side-toggle .st-pane { opacity: 0; }
 :where(.holds) { overscroll-behavior-y: contain; }
 @keyframes view-in { from { opacity: 0; transform: translateY(5px); } }
 @media (prefers-reduced-motion: reduce) { .view { animation-name: fade-in; } }
-body.window .view { padding: 2px 16px 8px; }
+body.window .view { padding: 2px max(0px, calc(16px - var(--bar, 0px))) 8px 16px; }
 /* every page keeps to a width the eye can follow across, centred in a
    maximized window, rather than its name at one edge and its switch at the
    other (#860); Routing, Usage and Sessions too, so a large screen doesn't
    stretch them alone edge to edge while the others sit in the middle (面条 on
    Discord): their tables and charts lay out by the room they get */
-body.window :is(#view-agents, #view-sessions, #view-providers, #view-routing, #view-gateway, #view-usage, #view-library, #view-plugins, #view-settings) { padding-left: max(16px, calc(50% - 600px)); padding-right: max(16px, calc(50% - 600px)); }
+body.window :is(#view-agents, #view-sessions, #view-providers, #view-routing, #view-gateway, #view-usage, #view-library, #view-plugins, #view-settings) { padding-left: max(16px, calc(50% - 600px)); padding-right: max(0px, calc(max(16px, calc(50% - 600px)) - var(--bar, 0px))); }
 /* a view takes focus (tabIndex -1) only so the keys scroll it after a click;
    a ring round the whole list there marks nothing a reader can act on (#1601) */
 .view:focus { outline: none; }
@@ -720,8 +724,17 @@ body.window .row.agent .who .ag-cli { flex: 0 1 auto; overflow: hidden; }
 .ag-install-cmd { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .ag-install-via { flex: 0 0 84px; font-size: 11.5px; color: var(--muted); }
 .ag-install-cmd code { flex: 1 1 auto; min-width: 0; overflow-x: auto; white-space: nowrap; font-size: 11.5px; padding: 2px 6px; border-radius: 5px; background: var(--pill); color: var(--fg-2); }
+/* the agents plugins add: one row, its way to Plugins */
+.ag-install-plugins { width: 100%; align-items: center; font: inherit; color: var(--accent); text-align: left; cursor: pointer; transition: background .2s; }
+.ag-install-plugins:hover { background: var(--accent-soft); }
+.ag-install-plugins:focus-visible { outline: 1.5px solid var(--fg-2); outline-offset: 1px; }
+.ag-install-plugins .ag-install-who { flex: none; padding-top: 0; }
+.ag-install-plugins .puzzle { flex: none; width: 18px; height: 18px; display: grid; place-items: center; }
+.ag-install-pnames { flex: 1 1 auto; min-width: 0; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ag-install-plugins > .chev { flex: none; display: inline-flex; opacity: .7; }
 @media (max-width: 600px) {
   .ag-install-row { flex-direction: column; gap: 6px; }
+  .ag-install-plugins { flex-direction: row; }
   .ag-install-who { flex: none; }
 }
 /* the panel's name column has no room for it: there it is a badge on the
@@ -2856,7 +2869,7 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
    in the content box (a negative margin-end was sideways scroll in macOS
    15's WebKit: see .lib-head, #1236) */
 #view-providers .after-list { position: sticky; bottom: -8px; z-index: 2; margin: 0 0 -8px; padding: 14px 4px 12px; transition: opacity .18s ease, visibility 0s; }
-#view-providers .after-list::before { content: ""; position: absolute; z-index: -1; inset: 0 -12px; pointer-events: none; background: linear-gradient(to bottom, transparent, var(--bg) 12px); }
+#view-providers .after-list::before { content: ""; position: absolute; z-index: -1; inset: 0 calc(var(--bar, 0px) - 12px) 0 -12px; pointer-events: none; background: linear-gradient(to bottom, transparent, var(--bg) 12px); } /* the bar's room is out of the padding */
 /* stepping aside it fades, then goes; back, it is there at once, so the
    focus can go to it as the sheet closes */
 #view-providers .after-list.away { opacity: 0; visibility: hidden; transition: opacity .18s ease, visibility 0s .18s; }
@@ -3321,7 +3334,7 @@ body:not(.side-nav) #view-settings .set-head { position: sticky; top: 0; z-index
 body.window:not(.side-nav) #view-settings .set-head { top: -2px; --bleed-l: 16px; --bleed-r: 16px; }
 body:not(.side-nav) #view-settings .set-head::before {
   content: ""; position: absolute; z-index: -1; pointer-events: none;
-  top: -6px; bottom: -6px; left: calc(-1 * var(--bleed-l)); right: calc(-1 * var(--bleed-r));
+  top: -6px; bottom: -6px; left: calc(-1 * var(--bleed-l)); right: calc(var(--bar, 0px) - var(--bleed-r));
   background: color-mix(in srgb, var(--bg) 92%, transparent);
   -webkit-backdrop-filter: saturate(1.6) blur(16px); backdrop-filter: saturate(1.6) blur(16px);
   box-shadow: 0 1px 0 transparent; transition: box-shadow .18s var(--ease);
@@ -3761,7 +3774,7 @@ body.panel .modal { padding: 16px 12px; }
   body.web .view {
     --view-left: max(12px, env(safe-area-inset-left));
     --view-right: max(12px, env(safe-area-inset-right));
-    padding: 2px var(--view-right) 12px var(--view-left);
+    padding: 2px max(0px, calc(var(--view-right) - var(--bar, 0px))) 12px var(--view-left);
   }
   body.web .foot { padding-bottom: max(8px, env(safe-area-inset-bottom)); min-width: 0; }
   body.web .foot .status { min-width: 0; overflow-wrap: anywhere; }

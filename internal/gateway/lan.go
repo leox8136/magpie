@@ -179,14 +179,57 @@ func LANURLs() []string {
 // ISP assigns to the network card itself. The gateway's addresses and
 // `magpie web`'s links are both made from these, so the two list the
 // same computer the same way (a static public address was in one and not
-// the other).
+// the other). Private ones come first: in the interfaces' order the public
+// one came first, and Settings offered it as the address under "Share on
+// local network" (the same user, asking why sharing was on the internet).
 func LANHosts() []string {
-	var out []string
+	var near, far []string
 	for _, ip := range hostIPs() {
 		if ip.To4() == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
 			continue
 		}
-		out = append(out, ip.String())
+		if PublicIP(ip) {
+			far = append(far, ip.String())
+		} else {
+			near = append(near, ip.String())
+		}
+	}
+	return append(near, far...)
+}
+
+// sharedRanges are IPv4 ranges outside RFC 1918 that still aren't the
+// internet: carrier-grade NAT, which Tailscale uses, and the benchmarking
+// range proxies' TUN interfaces (Clash, Surge) take.
+var sharedRanges = []*net.IPNet{
+	{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)},
+	{IP: net.IPv4(198, 18, 0, 0), Mask: net.CIDRMask(15, 32)},
+}
+
+// PublicIP: ip is an internet address, which any computer online may
+// reach, not one on a private network.
+func PublicIP(ip net.IP) bool {
+	if !ip.IsGlobalUnicast() || ip.IsPrivate() {
+		return false
+	}
+	for _, n := range sharedRanges {
+		if n.Contains(ip) {
+			return false
+		}
+	}
+	return true
+}
+
+// PublicURLs are those of urls (LANURLs) at an internet address.
+func PublicURLs(urls []string) []string {
+	var out []string
+	for _, u := range urls {
+		p, err := url.Parse(u)
+		if err != nil {
+			continue
+		}
+		if ip := net.ParseIP(p.Hostname()); ip != nil && PublicIP(ip) {
+			out = append(out, u)
+		}
 	}
 	return out
 }

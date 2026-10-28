@@ -15,7 +15,7 @@
 }
 .lib-head::before {
   content: ""; position: absolute; z-index: -1; pointer-events: none;
-  top: 0; bottom: 0; left: calc(-1 * var(--bleed-l)); right: calc(-1 * var(--bleed-r));
+  top: 0; bottom: 0; left: calc(-1 * var(--bleed-l)); right: calc(var(--bar, 0px) - var(--bleed-r)); /* the bar's room is out of the padding */
   background: color-mix(in srgb, var(--bg) 92%, transparent);
   -webkit-backdrop-filter: saturate(1.6) blur(16px); backdrop-filter: saturate(1.6) blur(16px);
   box-shadow: 0 1px 0 transparent; transition: box-shadow .18s var(--ease);
@@ -412,9 +412,14 @@ input.lib-setname:focus { border-color: var(--accent); box-shadow: 0 0 0 3px col
 .mk-top { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .mk-icon {
   flex: none; width: 36px; height: 36px; border-radius: 9px; overflow: hidden; display: grid; place-items: center;
-  background: #fff; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .07);
+  position: relative; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .07);
 }
-.mk-icon img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* The white sits on a plate 1px in, not on the tile: under an opaque logo
+   a white background bleeds through the rounded clip's soft edge as a white
+   fringe at each corner. */
+.mk-icon::before { content: ""; position: absolute; inset: 1px; border-radius: inherit; background: #fff; }
+.mk-icon.mono::before { content: none; }
+.mk-icon img { position: relative; width: 100%; height: 100%; object-fit: cover; display: block; }
 .mk-icon.svg img { width: 72%; height: 72%; object-fit: contain; }
 .mk-icon.mono { background: var(--pill); box-shadow: none; }
 .mk-mono { font-size: 15px; font-weight: 600; color: var(--fg-2); }

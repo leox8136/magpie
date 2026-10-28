@@ -2548,8 +2548,13 @@ function goneSaid(a) {
 let installsOpen = null; // null: as the list has it (open with no agents)
 const VIA = { script: "Installer", powershell: "PowerShell", brew: "Homebrew", npm: "npm" };
 
+let pluginAgents = []; // the names of the agents a suggested plugin adds, not installed
+
 async function loadInstalls() {
   if (mode === "panel") return;
+  // the plugins' agents come from the market, which may be fetched: the
+  // commands aren't held for them
+  api("plugins/agents").then((r) => { pluginAgents = Array.isArray(r) ? r : []; paintInstalls(); }, () => {});
   let r;
   try { r = await api("agents/install"); } catch { return; } // it just isn't shown
   installInfo = Array.isArray(r) ? r : [];
@@ -2586,7 +2591,7 @@ function paintInstalls() {
   // one listed above by its settings alone, its CLI gone (#843), is
   // offered again too
   const items = installInfo.filter((x) => x.missing || !here.has(x.id));
-  if (!items.length) { box?.remove(); return; }
+  if (!items.length && !pluginAgents.length) { box?.remove(); return; }
   if (!box) {
     box = el("section", "ag-install");
     box.id = "agentsInstall";
@@ -2597,7 +2602,7 @@ function paintInstalls() {
   head.type = "button";
   head.setAttribute("aria-expanded", String(open));
   head.dataset.unrolls = ""; // it stays put, and its commands open beneath it
-  head.append(el("span", "", t("Install another agent ({n})", { n: items.length })), el("span", "chev", svg(CHEV, 10, 1.8)));
+  head.append(el("span", "", t("Install another agent ({n})", { n: items.length + pluginAgents.length })), el("span", "chev", svg(CHEV, 10, 1.8)));
   head.onclick = (e) => {
     e.stopPropagation();
     installsOpen = !open;
@@ -2606,7 +2611,7 @@ function paintInstalls() {
   };
   const parts = [head];
   if (open) {
-    parts.push(el("p", "ag-install-note", installNote(items)));
+    if (items.length) parts.push(el("p", "ag-install-note", installNote(items)));
     for (const x of items) {
       const r = el("div", "ag-install-row");
       r.dataset.id = x.id;
@@ -2629,8 +2634,33 @@ function paintInstalls() {
       r.append(who, cmds);
       parts.push(r);
     }
+    // the agents plugins add, installed from Plugins as every plugin is
+    if (pluginAgents.length) parts.push(pluginAgentsRow());
   }
   box.replaceChildren(...parts);
+}
+
+function pluginAgentsRow() {
+  const r = el("button", "ag-install-row ag-install-plugins");
+  r.type = "button";
+  const who = el("div", "ag-install-who");
+  const ic = el("span", "puzzle");
+  ic.append(svg(PUZZLE, 15, 1.4));
+  const name = el("span", "ag-install-name");
+  name.append(el("b", "", t("More in Plugins")));
+  who.append(ic, name);
+  const names = el("span", "ag-install-pnames", pluginAgents.join(t(", ")));
+  r.append(who, names, el("span", "chev", svg(CHEV_R, 11, 1.6)));
+  r.title = t("Agents magpie has no setup of its own for: install a plugin for one in the Plugins tab, and it is listed here");
+  r.onclick = (e) => openPluginAgents(e);
+  return r;
+}
+
+// openPluginAgents: the Plugins tab, at its Agents
+async function openPluginAgents(e) {
+  if (mode !== "window") { api("window/main?view=plugins", {}).catch(() => {}); return; }
+  if (!await show("plugins")) return;
+  window.pluginAgentsTo?.(e);
 }
 
 // ---------- the agents' order, and the ones put away ----------
@@ -24065,7 +24095,7 @@ function renderSideGw(g) {
   if (b.hidden) return;
   // a page other machines open (magpie web) says where they reach it,
   // MAGPIE_PUBLIC_URL, as the Gateway page does (#1551; noahhrreion)
-  const url = web && g.publicURL || g.url;
+  const url = self.sideLAN?.(g) || web && g.publicURL || g.url;
   let host = url;
   try { host = new URL(url).host; } catch {}
   b.classList.toggle("off", !g.running);
@@ -24075,7 +24105,7 @@ function renderSideGw(g) {
   // gateway leaves it no room ("Zugangspunkt") says the address alone, the
   // word kept in its tooltip
   if (g.running && s.scrollWidth > s.clientWidth) s.textContent = host;
-  b.title = g.running ? t("Gateway") + " " + url : url;
+  b.title = (g.running ? t("Gateway") + " " + url : url) + (web || url == g.url ? "" : " · " + g.url);
 }
 if (mode === "window") {
   $("#sideGw").onclick = () => { show("gateway"); $("#sideGw").blur(); };
