@@ -15,7 +15,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -43,44 +42,12 @@ func Named(secret string) bool {
 	if secret == "" {
 		return false
 	}
-	own := ownSecrets()
-	_, ok := own[secret]
+	store, err := authenticationStore()
+	if err != nil {
+		return false
+	}
+	_, ok := store.keys[sha256.Sum256([]byte(secret))]
 	return ok
-}
-
-// own caches the key store's own-value secrets by the file's size and
-// time, so a request from this computer doesn't read it each time.
-var own struct {
-	sync.Mutex
-	size    int64
-	mod     int64
-	secrets map[string]struct{}
-}
-
-func ownSecrets() map[string]struct{} {
-	fi, err := os.Stat(Path())
-	if err != nil {
-		return nil
-	}
-	own.Lock()
-	defer own.Unlock()
-	if own.secrets != nil && own.size == fi.Size() && own.mod == fi.ModTime().UnixNano() {
-		return own.secrets
-	}
-	mu.Lock()
-	keys, err := load()
-	mu.Unlock()
-	if err != nil {
-		return nil // unknown: tried again on the next request
-	}
-	m := map[string]struct{}{}
-	for _, k := range keys {
-		if k.Secret != "" && !Managed(k.Secret) {
-			m[k.Secret] = struct{}{}
-		}
-	}
-	own.size, own.mod, own.secrets = fi.Size(), fi.ModTime().UnixNano(), m
-	return m
 }
 
 // ownSecret checks a key value a user brings (one their clients already
@@ -488,30 +455,37 @@ func setLegacyMirror(s *settings.Settings, k Key) error {
 	return nil
 }
 
-// Authenticate reloads the store so revocation takes effect in running gateways.
+// Authenticate checks the current key store; unchanged stores reuse an index.
 func Authenticate(secret string) (Identity, bool) {
-	mu.Lock()
-	defer mu.Unlock()
-	keys, err := load()
-	if err != nil || secret == "" {
+	if secret == "" {
 		return Identity{}, false
 	}
-	for _, k := range keys {
-		if subtle.ConstantTimeCompare([]byte(secret), []byte(k.Secret)) == 1 {
-			if k.Off {
-				return Identity{}, false
-			}
-			return Identity{KeyID: k.ID, KeyName: k.Name, Limit: k.Limit, More: k.More, Models: k.Models, Accounts: k.Accounts, Quotas: k.Quotas}, true
+	store, err := authenticationStore()
+	if err != nil {
+		return Identity{}, false
+	}
+	if k, ok := store.keys[sha256.Sum256([]byte(secret))]; ok {
+		if k.Off || subtle.ConstantTimeCompare([]byte(secret), []byte(k.Secret)) != 1 {
+			return Identity{}, false
 		}
+		return keyIdentity(k), true
 	}
 	s := settings.Load()
-	// A read-only config directory may prevent the first store write. Never
-	// fall back after either durable marker exists, or to a revoked mirror.
-	if s.LAN && s.LANKeyID == "" && s.LANKey != "" && !strings.HasPrefix(s.LANKey, revokedLANPrefix) && !slices.ContainsFunc(keys, func(k Key) bool { return k.LAN }) && subtle.ConstantTimeCompare([]byte(secret), []byte(s.LANKey)) == 1 {
-		k := legacyLANKey(s.LANKey)
+	if s.LAN && s.LANKeyID == "" && s.LANKey != "" && !strings.HasPrefix(s.LANKey, revokedLANPrefix) && !store.lan && subtle.ConstantTimeCompare([]byte(secret), []byte(s.LANKey)) == 1 {
+		k := legacyLANKey(secret)
 		return Identity{KeyID: k.ID, KeyName: k.Name}, true
 	}
 	return Identity{}, false
+}
+
+// A caller owns the returned restrictions, never the cached key's slices.
+func keyIdentity(k Key) Identity {
+	var limit *Limit
+	if k.Limit != nil {
+		v := *k.Limit
+		limit = &v
+	}
+	return Identity{KeyID: k.ID, KeyName: k.Name, Limit: limit, More: slices.Clone(k.More), Models: slices.Clone(k.Models), Accounts: slices.Clone(k.Accounts), Quotas: k.Quotas}
 }
 
 func legacyLANKey(secret string) Key {
@@ -647,8 +621,18 @@ func save(keys []Key) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if err := os.Chmod(Path(), 0o600); err != nil {
+	info, err := os.Stat(Path())
+	if err != nil {
 		return err
 	}
-	return edit.WriteAtomic(Path(), append(b, '\n'))
+	// Avoid changing ctime before replacement when permissions are already
+	// correct: readers can keep using the old index while the writer prepares.
+	if info.Mode().Perm() != 0o600 {
+		if err := os.Chmod(Path(), 0o600); err != nil {
+			return err
+		}
+	}
+	b = append(b, '\n')
+	authPrepared.Store(indexedStore(Path(), b, keys))
+	return edit.WriteAtomic(Path(), b)
 }
