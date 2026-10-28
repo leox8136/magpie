@@ -151,7 +151,7 @@ func sumsFor(state *keyBudget, keyID string, starts []time.Time) []*sums {
 func read(keyID string, start time.Time) *sums {
 	s := &sums{start: start}
 	cost := usage.NewCoster()
-	usage.Visit(start, func(r usage.Record) {
+	usage.VisitKey(keyID, start, func(r usage.Record) {
 		if r.CallerKeyID == keyID && counts(r) && !r.Time.Before(start) {
 			c, ok := cost(r)
 			s.add(r, c, ok)

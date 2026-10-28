@@ -43,6 +43,7 @@ type logSnapshot struct {
 	digest  []byte // the hash's running state, which the next parse continues
 	version uint64
 	blocks  []*rowChunk
+	callers []callerBlock // sorted caller IDs for each immutable block
 	first   time.Time
 	// firstOwn is the first call magpie carried itself, leaving out what
 	// apps reported (#1874): a backfill reaching back doesn't make the log
@@ -143,6 +144,7 @@ func readLogSnapshot() *logSnapshot {
 	if continued && resumeLogHash(sum, old.digest) {
 		next.off, next.first, next.firstOwn = old.off, old.first, old.firstOwn
 		next.blocks = slices.Clone(old.blocks)
+		next.callers = slices.Clone(old.callers)
 		next.keyProviders = maps.Clone(old.keyProviders)
 		next.probes = slices.Clip(old.probes) // appended to, never written in
 		next.hosts = maps.Clone(old.hosts)
@@ -161,6 +163,7 @@ func readLogSnapshot() *logSnapshot {
 	if n := len(next.blocks); n > 0 && next.blocks[n-1].Count < logBlockRows {
 		tail = next.blocks[n-1].writable()
 		next.blocks = next.blocks[:n-1]
+		next.callers = next.callers[:n-1]
 		for i := range tail.Rows {
 			routes.seen(tail, i)
 		}
@@ -200,12 +203,14 @@ func readLogSnapshot() *logSnapshot {
 			next.keyProviders[r.Provider] = true
 		}
 		if len(tail.Rows) == logBlockRows {
+			next.callers = append(next.callers, blockCallers(tail))
 			next.blocks = append(next.blocks, tail.freeze())
 			tail = nil
 			clear(routes)
 		}
 	}
 	if tail != nil {
+		next.callers = append(next.callers, blockCallers(tail))
 		next.blocks = append(next.blocks, tail.freeze())
 	}
 	next.hash, next.digest = fmt.Sprintf("%x", sum.Sum(nil)), marshalLogHash(sum)
@@ -224,6 +229,9 @@ func readLogSnapshot() *logSnapshot {
 	logAppends.Unlock()
 	for _, c := range next.blocks {
 		next.bytes += c.Bytes
+	}
+	for _, callers := range next.callers {
+		next.bytes += callers.bytes
 	}
 	logIndex.snapshot = next
 	return next
@@ -366,4 +374,49 @@ func noteLogAppend(path string, before, after os.FileInfo) {
 		logAppends.path, logAppends.base = path, before
 	}
 	logAppends.last = after
+}
+
+// blockCallers keeps IDs independently of the compressed block's string table.
+type callerBlock struct {
+	ids   []string
+	bytes int64
+}
+
+func blockCallers(c *rowChunk) callerBlock {
+	ids := make([]string, 0, len(c.Rows))
+	for i := range c.Rows {
+		ids = append(ids, c.Strings[c.text(&c.Rows[i], rowCallerKey)])
+	}
+	slices.Sort(ids)
+	ids = slices.Compact(ids)
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		out[i] = strings.Clone(id)
+	}
+	size := int64(32 + 16*len(out))
+	for _, id := range out {
+		size += int64(len(id))
+	}
+	return callerBlock{ids: out, bytes: size}
+}
+
+func (s *logSnapshot) visitKey(key string, since time.Time, fn func(Record)) {
+	for i, packed := range s.blocks {
+		if packed.Latest.Before(since) {
+			continue
+		}
+		if _, found := slices.BinarySearch(s.callers[i].ids, key); !found {
+			continue
+		}
+		c := packed.unpack()
+		if c == nil {
+			continue
+		}
+		for j := range c.Rows {
+			p := &c.Rows[j]
+			if !p.Time.Before(since) && c.Strings[c.text(p, rowCallerKey)] == key {
+				fn(c.row(j).Record)
+			}
+		}
+	}
 }

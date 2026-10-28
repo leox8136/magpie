@@ -1119,6 +1119,12 @@ func ledgerSeriesAt(p Period, rows []Row, now time.Time) (bucket string, pts []S
 // does so itself).
 func Visit(since time.Time, fn func(Record)) { readLogSnapshot().visit(since, fn) }
 
+// VisitKey visits one caller's records, skipping compressed blocks belonging
+// entirely to other callers. File changes use the same index refresh as Visit.
+func VisitKey(key string, since time.Time, fn func(Record)) {
+	readLogSnapshot().visitKey(key, since, fn)
+}
+
 // NewCoster prices one record at a time at the effective prices the
 // ledger uses, read once: its cost in USD, and false for a call with
 // tokens but no known price.

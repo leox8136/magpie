@@ -408,8 +408,13 @@ Budget reservations, window initialization and settlement use a lock per
 key and usage-log path (`budget.stateFor`). A slow settlement for one key
 leaves another key's warm-window admission available. Log appends remain
 synchronous and serialized by the usage store; a cold window can still wait
-for that store. Settlement and window initialization for the same key retain
-their ordering, so the persisted call enters each cached window once.
+for that store. Each immutable usage block keeps a sorted caller-ID index;
+`usage.VisitKey` skips unrelated blocks before decoding and visits only the
+requested caller's rows. Appends rebuild the tail block's index, while file
+replacement and truncation rebuild it with the ledger snapshot. The first
+process-wide ledger load still reads the JSONL file. Settlement and window
+initialization for the same key retain their ordering, so the persisted call
+enters each cached window once.
 
 `GET /v1/magpie/limit` (`keyLimit` in
 [`key_limit.go`](../../internal/gateway/key_limit.go)) answers the limit of
@@ -1046,9 +1051,14 @@ the row of the entry that id reaches, with its label, under the bare id.
 
 ## Verification
 
+The key and ledger benchmarks use synthetic data: authentication after a
+100,000-key store update, and single-key reads from about 100,000 ledger
+records. The ledger index benchmark excludes initial file parsing; the
+`BenchmarkVisitKeyLedger` benchmark includes file-change checks.
+
 ```sh
-go test -tags nogui -race ./internal/access ./internal/budget
-go test -tags nogui ./internal/access -run '^$' -bench 'BenchmarkAuthenticateKeyCount|BenchmarkKeyUpdateAndReauthentication' -benchmem -count=3
+go test -tags nogui -race ./internal/access ./internal/budget ./internal/usage
+go test -tags nogui ./internal/access ./internal/usage -run '^$' -bench 'BenchmarkKeyUpdateAndReauthentication|BenchmarkVisitKey' -benchmem -count=3
 ```
 
 ```sh
