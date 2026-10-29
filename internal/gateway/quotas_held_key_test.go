@@ -29,7 +29,10 @@ func TestHeldKeyToldNoAccounts(t *testing.T) {
 	if err := provider.Save(provider.Provider{ID: "plan", Name: "Plan", Key: "upstream-secret", Chat: up.URL + "/v1", Models: []string{"m1"}}); err != nil {
 		t.Fatal(err)
 	}
-	keys, secrets := newCaller(t, "Owner", "Budget", "Models", "Accounts")
+	keys, secrets := newCaller(t, "Owner", "Budget", "Models", "Accounts", "Concurrency")
+	if _, err := access.Update("concurrency-key", access.Change{Key: keys[4].ID, Concurrency: &access.Concurrency{MaxConcurrency: 2}}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := access.Update("limit-key", access.Change{Key: keys[1].ID, Limit: &access.Limit{Period: "day", Tokens: 1_000_000}}); err != nil {
 		t.Fatal(err)
 	}

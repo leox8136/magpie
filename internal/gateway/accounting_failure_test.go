@@ -99,3 +99,39 @@ func TestFailedAccountingBlocksWarmBudget(t *testing.T) {
 		t.Fatalf("retry lost or doubled consumption: %+v", st)
 	}
 }
+
+func TestAccountingAdminPermissions(t *testing.T) {
+	fresh(t)
+	keys, secrets := newCaller(t, "tenant")
+	callerPolicy(t, keys[0].ID, 1, 0, 0)
+	s := New()
+	for _, method := range []string{"GET", "POST"} {
+		path := accountingPath
+		if method == "POST" {
+			path += "/retry"
+		}
+		for _, tc := range []struct {
+			secret, addr, origin string
+			want                 int
+		}{
+			{"magpie", "127.0.0.1:1234", "", 200},
+			{secrets[0], "127.0.0.1:1234", "", 403},
+			{"", "192.0.2.1:1234", "", 401},
+			{"magpie", "127.0.0.1:1234", "https://evil.example", 403},
+		} {
+			r := httptest.NewRequest(method, path, nil)
+			r.RemoteAddr = tc.addr
+			if tc.secret != "" {
+				r.Header.Set("Authorization", "Bearer "+tc.secret)
+			}
+			if tc.origin != "" {
+				r.Header.Set("Origin", tc.origin)
+			}
+			w := httptest.NewRecorder()
+			s.Front().ServeHTTP(w, r)
+			if w.Code != tc.want {
+				t.Errorf("%s %s %s: %d want %d", method, tc.addr, tc.origin, w.Code, tc.want)
+			}
+		}
+	}
+}

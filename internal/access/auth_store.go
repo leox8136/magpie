@@ -45,7 +45,7 @@ func indexedStore(path string, b []byte, keys []Key) *authStore {
 		hash := sha256.Sum256([]byte(k.Secret))
 		if _, exists := s.keys[hash]; !exists {
 			id := keyIdentity(k)
-			k.Limit, k.More, k.Models, k.Accounts = id.Limit, id.More, id.Models, id.Accounts
+			k.Limit, k.More, k.Models, k.Accounts, k.Concurrency = id.Limit, id.More, id.Models, id.Accounts, id.Concurrency
 			s.keys[hash] = k
 		}
 		s.lan = s.lan || k.LAN

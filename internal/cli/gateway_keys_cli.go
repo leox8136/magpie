@@ -25,6 +25,10 @@ func gatewayKeysTo(out io.Writer, args []string) error {
 		args = []string{"list"}
 	}
 	action := args[0]
+	if action == "concurrency" {
+		access.MigrateLegacyLANKeyBestEffort()
+		return gatewayKeyConcurrency(out, args[1:])
+	}
 	if action == "accounting" {
 		return gatewayAccounting(out, gateway.URL(), args[1:])
 	}
@@ -63,7 +67,7 @@ func gatewayKeysTo(out io.Writer, args []string) error {
 		args = args[:2]
 	}
 	if (action == "list" && len(args) != 1) || (action != "list" && len(args) != 2) {
-		return fmt.Errorf("usage: magpie gateway-key list | add <name> [--key <value> | --key -] | rotate <id> | remove <id> | limit <id> [list | off | reset [<n>] | remove <n> | [add] day|week|month|<N>d|<N>h [--tokens N] [--cost USD] [--cache-reads]] | models <id> [all | <provider>/<model>|<provider>/* ...] | accounts <id> [all | <provider>/<account>|<provider>/<key id> ...] | quotas <id> [on | off] | accounting [retry]")
+		return fmt.Errorf("usage: magpie gateway-key list | add <name> [--key <value> | --key -] | rotate <id> | remove <id> | limit <id> [list | off | reset [<n>] | remove <n> | [add] day|week|month|<N>d|<N>h [--tokens N] [--cost USD] [--cache-reads]] | models <id> [all | <provider>/<model>|<provider>/* ...] | accounts <id> [all | <provider>/<account>|<provider>/<key id> ...] | quotas <id> [on | off] | concurrency <id> [off | --max N [--queue N] [--wait seconds]] | accounting [retry]")
 	}
 	switch action {
 	case "list", "add", "rotate", "remove":

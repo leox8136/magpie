@@ -79,6 +79,11 @@ func (l *lanes) acquire(ctx context.Context, who string, limit int) (release fun
 // stood in the queue: 0 when a slot was free at once or there is no
 // limit, so a request that never queued never reads as queued (#2153).
 func (l *lanes) take(ctx context.Context, who string, limit, queue int, wait time.Duration) (release func(), waited time.Duration, err error) {
+	return l.takeQueue(ctx, who, limit, queue, wait, false)
+}
+
+// takeQueue also permits an explicitly empty queue for caller-key admission.
+func (l *lanes) takeQueue(ctx context.Context, who string, limit, queue int, wait time.Duration, bounded bool) (release func(), waited time.Duration, err error) {
 	l.mu.Lock()
 	if l.m == nil {
 		l.m = map[string]*lane{}
@@ -104,7 +109,7 @@ func (l *lanes) take(ctx context.Context, who string, limit, queue int, wait tim
 		l.mu.Unlock()
 		return l.releaser(who, ln), 0, nil
 	}
-	if queue > 0 && len(ln.queue) >= queue {
+	if (queue > 0 || bounded) && len(ln.queue) >= queue {
 		l.mu.Unlock()
 		return nil, 0, errQueueFull
 	}
@@ -259,8 +264,12 @@ func (s *Server) concurrency(w http.ResponseWriter, r *http.Request) {
 	for _, ln := range lanes {
 		waiting += ln.Waiting
 	}
+	callers := s.callerLaneSnapshot()
+	for _, ln := range callers {
+		waiting += ln.Waiting
+	}
 	b := s.Busy()
-	writeJSON(w, 200, map[string]any{"object": "concurrency", "data": lanes, "requests": b.Requests, "waiting": waiting, "tools": b.Tools, "active": s.Active()})
+	writeJSON(w, 200, map[string]any{"object": "concurrency", "data": lanes, "callerKeys": callers, "requests": b.Requests, "waiting": waiting, "tools": b.Tools, "active": s.Active()})
 }
 
 // Lanes is how each key or account with requests out or waiting under a
@@ -271,6 +280,18 @@ func (s *Server) Lanes() map[string]Lane {
 	out := map[string]Lane{}
 	for who, ln := range s.lanes.m {
 		out[who] = Lane{Busy: ln.busy, Waiting: len(ln.queue), Limit: ln.limit}
+	}
+	return out
+}
+
+// callerLaneSnapshot is an administrator view of active caller lanes, by stable
+// key ID, without secrets. Tenant-scoped keys cannot read this shared endpoint.
+func (s *Server) callerLaneSnapshot() map[string]Lane {
+	s.callerLanes.mu.Lock()
+	defer s.callerLanes.mu.Unlock()
+	out := make(map[string]Lane, len(s.callerLanes.m))
+	for id, ln := range s.callerLanes.m {
+		out[id] = Lane{Busy: ln.busy, Waiting: len(ln.queue), Limit: ln.limit}
 	}
 	return out
 }

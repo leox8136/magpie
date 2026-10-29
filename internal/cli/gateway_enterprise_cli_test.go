@@ -7,7 +7,43 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/yetone/magpie/internal/access"
 )
+
+func TestGatewayCallerConcurrencyCLI(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if _, err := access.Update("add-key", access.Change{Name: "tenant"}); err != nil {
+		t.Fatal(err)
+	}
+	keys, err := access.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := keys[0].ID
+	for _, args := range [][]string{{"--max", "2", "--queue", "3", "--wait", "1"}, {"off"}} {
+		var out bytes.Buffer
+		if err := gatewayKeysTo(&out, append([]string{"gateway-key", "concurrency", id}, args...)); err != nil {
+			t.Fatal(err)
+		}
+		keys, err = access.List()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if args[0] == "off" {
+			if keys[0].Concurrency != nil {
+				t.Fatal("still limited")
+			}
+		} else if keys[0].Concurrency == nil || keys[0].Concurrency.MaxConcurrency != 2 || keys[0].Concurrency.QueueLimit != 3 {
+			t.Fatal(keys[0])
+		}
+	}
+	for _, args := range [][]string{{"--max", "-1"}, {"--queue", "1"}, {"--max", "1", "--max", "2"}, {"--max"}} {
+		if err := gatewayKeyConcurrency(io.Discard, append([]string{id}, args...)); err == nil {
+			t.Fatal("invalid arguments accepted", args)
+		}
+	}
+}
 
 func TestAccountingCLIUsesServingProcess(t *testing.T) {
 	for _, retry := range []bool{false, true} {

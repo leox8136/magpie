@@ -24,10 +24,10 @@ import (
 
 const usageRefused = "magpie's usage is told to another machine only when magpie is shared on the local network (Settings → Network and sharing → Share on local network) and the request carries its API key (Authorization: Bearer <key> or x-api-key: <key>)"
 
-// heldKey: the request's gateway key is held to a budget, models or
+// heldKey: the request's gateway key is held to a budget, concurrency, models or
 // accounts, and so sees only its own usage.
 func heldKey(who access.Identity) bool {
-	return who.KeyID != "" && (len(who.Limits()) > 0 || len(who.Models) > 0 || len(who.Accounts) > 0)
+	return who.KeyID != "" && (len(who.Limits()) > 0 || who.Concurrency != nil || len(who.Models) > 0 || len(who.Accounts) > 0)
 }
 
 // heldRefused is what a held key is told where this magpie's own accounts
@@ -35,7 +35,7 @@ func heldKey(who access.Identity) bool {
 // accounts' lanes (321sssrt-bit, #1981: a friend given a key with a
 // budget saw every account's card, email and balance on their Remote
 // magpie's Usage page). The key's own limit stays at /v1/magpie/limit.
-const heldRefused = "this gateway key is held to a budget, models or accounts, so it is told nothing of this magpie's accounts: GET /v1/magpie/limit tells it its own limit"
+const heldRefused = "this gateway key is held to a budget, concurrency, models or accounts, so it is told nothing of this magpie's accounts: GET /v1/magpie/limit tells it its own limit"
 
 // refuseHeld answers a held key 403 with msg, marked with
 // provider.KeyHeldCode so another magpie shows the key's own card alone
@@ -53,7 +53,7 @@ func (s *Server) usageSummary(w http.ResponseWriter, r *http.Request) {
 		writeError(w, provider.Chat, http.StatusForbidden, usageRefused)
 		return
 	}
-	if refuseHeld(w, r, "this gateway key is held to a budget, models or accounts, so it is told its own calls alone: GET /v1/magpie/usage/requests") {
+	if refuseHeld(w, r, "this gateway key is held to a budget, concurrency, models or accounts, so it is told its own calls alone: GET /v1/magpie/usage/requests") {
 		return
 	}
 	out := usageapi.State(usageapi.PeriodOf(r.URL.Query().Get("period")))

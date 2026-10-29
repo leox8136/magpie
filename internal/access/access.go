@@ -76,12 +76,13 @@ func ownSecret(secret string, keys []Key) (string, error) {
 }
 
 type Key struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Off    bool   `json:"off,omitempty"`
-	LAN    bool   `json:"lan,omitempty"` // default key and durable migration marker
-	Secret string `json:"secret,omitempty"`
-	Masked string `json:"masked,omitempty"`
+	Concurrency *Concurrency `json:"concurrency,omitempty"`
+	ID          string       `json:"id"`
+	Name        string       `json:"name"`
+	Off         bool         `json:"off,omitempty"`
+	LAN         bool         `json:"lan,omitempty"` // default key and durable migration marker
+	Secret      string       `json:"secret,omitempty"`
+	Masked      string       `json:"masked,omitempty"`
 	// Limit is the key's own budget (#585); nil for none.
 	Limit *Limit `json:"limit,omitempty"`
 	// More are its limits after the first (#2227), each a window of its
@@ -105,6 +106,7 @@ type Key struct {
 // Identity is the gateway key a request came with, its budget, the
 // models and the accounts it may use.
 type Identity struct {
+	Concurrency    *Concurrency
 	KeyID, KeyName string
 	Limit          *Limit
 	More           []Limit
@@ -249,8 +251,9 @@ func random(n int) (string, error) {
 }
 
 type Change struct {
-	Key  string `json:"key"`
-	Name string `json:"name"`
+	Concurrency *Concurrency `json:"concurrency,omitempty"`
+	Key         string       `json:"key"`
+	Name        string       `json:"name"`
 	// Limit is what "limit-key" sets; nil or Unlimited takes the limit off.
 	Limit *Limit `json:"limit,omitempty"`
 	// Index is which of the key's limits "limit-key" sets and
@@ -327,6 +330,12 @@ func Update(action string, in Change) (string, error) {
 			keys[i].Secret = secret
 		case "rename-key":
 			keys[i].Name = name
+		case "concurrency-key":
+			policy, err := in.Concurrency.Valid()
+			if err != nil {
+				return "", err
+			}
+			keys[i].Concurrency = policy
 		case "limit-key":
 			lim, err := in.Limit.Valid()
 			if err != nil {
@@ -421,7 +430,7 @@ func Update(action string, in Change) (string, error) {
 		default:
 			return "", fmt.Errorf("unknown key action %q", action)
 		}
-		if defaultKey && action != "remove-key" && action != "rename-key" && action != "limit-key" && action != "reset-limit-key" && action != "models-key" && action != "accounts-key" && action != "quotas-key" {
+		if defaultKey && action != "remove-key" && action != "rename-key" && action != "limit-key" && action != "reset-limit-key" && action != "models-key" && action != "accounts-key" && action != "quotas-key" && action != "concurrency-key" {
 			mirror = &keys[i]
 		}
 	}
@@ -485,7 +494,12 @@ func keyIdentity(k Key) Identity {
 		v := *k.Limit
 		limit = &v
 	}
-	return Identity{KeyID: k.ID, KeyName: k.Name, Limit: limit, More: slices.Clone(k.More), Models: slices.Clone(k.Models), Accounts: slices.Clone(k.Accounts), Quotas: k.Quotas}
+	var concurrency *Concurrency
+	if k.Concurrency != nil {
+		v := *k.Concurrency
+		concurrency = &v
+	}
+	return Identity{KeyID: k.ID, KeyName: k.Name, Concurrency: concurrency, Limit: limit, More: slices.Clone(k.More), Models: slices.Clone(k.Models), Accounts: slices.Clone(k.Accounts), Quotas: k.Quotas}
 }
 
 func legacyLANKey(secret string) Key {

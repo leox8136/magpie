@@ -119,6 +119,7 @@ const usage = `magpie — one place to pick every agent's model
   magpie goroutines [<file>]      every goroutine of the running magpie, its stack and how long it waited, for a report of it stuck at something
   magpie gateway-key list|add <name>|rotate <id>|remove <id>   manage the keys clients use to call a shared gateway
   magpie gateway-key limit <id> [list|off|reset [n]|remove <n>|[add] day|week|month|<N>d|<N>h --tokens N --cost USD --cache-reads]   a key's own limits, and what it used
+  magpie gateway-key concurrency <id> [off|--max N --queue N --wait seconds]   caller request concurrency and bounded waiting
   magpie gateway-key accounting [retry]   inspect or retry accounting writes on the serving gateway
   magpie gateway-key models <id> [all|<provider>/<model>|<provider>/* ...]   the models a key may use, every one unless it names some
   magpie gateway-key quotas <id> [on|off]   whether a key held to a budget, models or accounts is told the quotas of what it may use

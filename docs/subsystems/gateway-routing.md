@@ -371,7 +371,7 @@ from another address is refused 403, and so is one from loopback that carries
 a proxy's forwarding header (a tunnel or Tailscale Serve here), or a LAN
 request while the gateway is shared, whatever key it holds. Rebinding,
 `Origin: null` and `*.localhost` pages are stopped before it by `lanGuard` and
-`corsGuard`, as on every route. A gateway key held to a budget, models or
+`corsGuard`, as on every route. A gateway key held to a budget, concurrency, models or
 accounts is refused with `KeyHeldCode`, as `/v1/magpie/concurrency` and
 `/v1/magpie/quotas` refuse it. It answers what `Server.Trace` holds, plus
 this process's `pid` and `serves` (the command that started it, `Serves`), so
@@ -402,7 +402,7 @@ failed writes and external edits cannot publish unverified permissions. Systems
 without a change-time stamp verify the file's bytes instead. Key management
 continues to serialize atomic replacements with its file lock; request
 lookups do not take that writer lock. Each returned identity owns its
-restriction slices and limit value.
+restriction slices, limit value and caller concurrency policy.
 
 Budget reservations, window initialization and settlement use a lock per
 key and usage-log path (`budget.stateFor`). A slow settlement for one key
@@ -458,6 +458,25 @@ while the gateway is stopped before starting it again. Tests:
 `TestFailedAccountingBlocksWarmBudget`, `TestAccountingAdminPermissions`,
 `TestLedgerRetry*`, `TestLedgerShortWriteNeverBlindlyReplayed`,
 `TestLedgerPendingQueueIsBounded` and `TestLedgerHealthDoesNotWaitForAppend`.
+
+A gateway key may also have an optional `concurrency` policy, independent of
+supplier/account lanes (`access.Concurrency`, `Server.callerLimited`). Existing
+keys have none. Admission by stable caller key ID precedes body reads and
+budget reservation; a permit covers supplier queues, failover and the complete
+stream through handler completion. Waiting holds no budget reservation.
+`maxConcurrency` is 1..100000; `queueLimit` is 0..100000, with zero rejecting
+excess immediately. Queuing defaults to a three-second wait, bounded at 300
+seconds; tune it within client/proxy timeouts. Full queues and expired waits
+return 429 with `Retry-After: 1`, without asking a supplier or triggering
+fallback. Cancellation removes the waiter or releases its permit. Bridge tool
+callbacks bypass caller admission so a held turn can finish. Policies are
+captured at authentication; changes govern newly authenticated requests.
+Concurrency-only keys are tenant-scoped too: shared usage, quotas, accounting
+and lane details follow the existing held-key restrictions.
+`GET /v1/magpie/concurrency` adds administrator-only `callerKeys` by stable ID,
+and includes caller queues in `waiting`. Tests: `TestCallerConcurrency*`,
+`TestCallerQueueCancellationTimeoutAndReservation`,
+`TestCallerConcurrencyHoldsStreamUntilEnd` and `TestGatewayCallerConcurrencyCLI`.
 
 The budget pre-read and the route share one decoded request buffer
 (`decodedRequestBody`, `readBoundedRequestBody`). Later reads still enforce

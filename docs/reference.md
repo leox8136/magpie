@@ -628,9 +628,19 @@ magpie gateway-key models <id> all     # every model
 magpie gateway-key accounts <id> codex/me@example.com   # only these accounts
 magpie gateway-key accounts <id> all    # every account
 magpie gateway-key quotas <id> on      # told the quotas of what it may use
+magpie gateway-key concurrency <id> --max 8 --queue 16 --wait 3
+magpie gateway-key concurrency <id>     # current caller concurrency policy
+magpie gateway-key concurrency <id> off # disable caller admission limits
 magpie gateway-key accounting           # serving process's write health
 magpie gateway-key accounting retry     # explicitly retry pending writes
 ```
+
+Caller concurrency is optional and disabled on existing keys. `--max` bounds
+complete requests, including streamed replies; `--queue 0` (the default)
+rejects excess immediately. With a queue, `--wait` defaults to three seconds.
+Waiting happens before reading the body or reserving budget. Full queues or
+expired waits return 429; canceled or finished requests release their slots.
+This is separate from each provider/account's outbound concurrency.
 
 Accounting write failures preserve the completed reply and stop subsequent
 budgeted requests with 503 until recovery. `accounting retry` asks the running
@@ -2021,7 +2031,7 @@ holds the answer until the route changes past the `seq` of the last one,
 so a UI can follow a turn with one request at a time. Only the session
 named is told; like `/v1/magpie/quotas`, it answers this machine, and
 another only with the key of a gateway shared on the local network. A key
-held to a budget, to some models or to some accounts is told the routes of
+held to a budget, concurrency, some models or some accounts is told the routes of
 its own requests alone: another key's session answers `route: null`.
 
 To show the one in use without a session, `GET /v1/magpie/quotas` (and
@@ -2127,7 +2137,7 @@ a `data` folder beside it) records no path, and a copy moved since its
 last start leaves the old one: run the program where it is, such as
 `& "$HOME\Downloads\magpie-windows-amd64.exe" goroutines | Out-Host`.
 
-A gateway key held to a budget, to some models or to some accounts is told
+A gateway key held to a budget, concurrency, some models or some accounts is told
 none of this magpie's accounts (#1981): `/v1/magpie/quotas`,
 `/v1/magpie/quotas/history`, `/v1/magpie/quotas/cards`,
 `POST /v1/magpie/quotas/refresh` and `/v1/magpie/concurrency` answer it
@@ -2161,7 +2171,7 @@ top 100 by tokens; `sessionCount` is how many there are. `GET /v1/magpie/usage/r
 keeps the calls no gateway key made, and `by.callerKey` splits the page's
 calls by key, `none` among them (#2521). What was said in a call is not
 in either. Like `/v1/magpie/quotas`, they answer this machine, and another
-only with a gateway key. A key held to a budget, to some models or to some
+only with a gateway key. A key held to a budget, concurrency, some models or some
 accounts is told its own calls alone: `/v1/magpie/usage` refuses it with a
 403, and `/v1/magpie/usage/requests` keeps only its rows, filter lists and
 share of the split by key.
@@ -2170,10 +2180,11 @@ What is in flight now, for a status bar such as SketchyBar (#2132):
 `GET /v1/magpie/concurrency` answers `requests`, every agent request the
 gateway is working on, whether or not any limit is set (those waiting for a
 slot among them); `waiting`, how many of those wait for a slot under a
-provider's or account's limit; and `tools`, Claude Code turns run through a
+provider's, account's or caller key's limit; and `tools`, Claude Code turns run through a
 Claude subscription that wait on their caller's tool results, which are not
 requests. Each is `0` when idle. `data` is each limited key's or account's
-own count, empty when no limit is set. `active` lists those requests one
+own count, empty when no limit is set. `callerKeys` adds caller-key lanes
+by stable ID (no credentials). `active` lists those requests one
 by one, oldest first, `[]` when idle: `id`, `agent`, `model` and
 `provider` (once routed), `session` when the agent sends one, `started`
 and `ms` since, and `phase` only where the gateway knows it: `slot`

@@ -412,10 +412,11 @@ type Call struct {
 
 // Server is the gateway.
 type Server struct {
-	client *http.Client
-	mu     sync.Mutex
-	recent []Call
-	calls  uint64 // the last Call.ID given
+	callerLanes lanes
+	client      *http.Client
+	mu          sync.Mutex
+	recent      []Call
+	calls       uint64 // the last Call.ID given
 	// unfit remembers the endpoints each provider's models were turned away
 	// from, so every later turn goes straight to one that takes them.
 	unfit        map[string]bool
@@ -825,7 +826,7 @@ func (s *Server) Handler() http.Handler {
 	})
 	// the goroutine dump first, ahead of every lock the rest can be stuck
 	// on (dumpFirst)
-	return s.dumpFirst(s.counted(holdCatalog(corsGuard(callerGuard(withCaller(keyLimited(mux)))))))
+	return s.dumpFirst(s.counted(holdCatalog(corsGuard(callerGuard(withCaller(s.callerLimited(keyLimited(mux))))))))
 }
 
 // responsesOverHTTP answers a GET on /v1/responses, which is how a client

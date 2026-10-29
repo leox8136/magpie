@@ -108,7 +108,7 @@ func (s *Server) usageIngest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if heldKey(who) {
-		writeError(w, provider.Chat, http.StatusForbidden, "this gateway key is held to a budget, models or accounts, so it may not report usage")
+		writeError(w, provider.Chat, http.StatusForbidden, "this gateway key is held to a budget, concurrency, models or accounts, so it may not report usage")
 		return
 	}
 	if mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mt != "application/json" {
