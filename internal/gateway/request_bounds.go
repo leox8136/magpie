@@ -1,7 +1,9 @@
 package gateway
 
 import (
+	"bytes"
 	"compress/gzip"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -44,25 +46,9 @@ func (s *Server) readRequestBody(w http.ResponseWriter, r *http.Request, from pr
 	if limit > 0 {
 		limits.body = limit
 	}
-	// wait for room before reading: a body waiting is not held (bodyRoom)
-	most := limits.body
-	if most <= 0 {
-		most = defaultBodyLimit
-	}
-	if n := r.ContentLength; n > 0 && n <= most {
-		if err := bodyRoom.take(r.Context(), n); err != nil {
-			w.Header().Set("Connection", "close") // its body is left unread
-			writeError(w, from, http.StatusServiceUnavailable, err.Error())
-			return nil, false
-		}
-	}
 	body, status, err := readBoundedRequestBody(w, r, limits)
 	if err != nil {
 		writeError(w, from, status, err.Error())
-		return nil, false
-	}
-	if err := bodyRoom.take(r.Context(), int64(len(body))); err != nil {
-		writeError(w, from, http.StatusServiceUnavailable, err.Error())
 		return nil, false
 	}
 	holdBody(r.Context(), body)
@@ -153,9 +139,28 @@ func (z *pooledZstd) Close() error {
 	return nil
 }
 
-// Read one bounded body, decoded; callers choose their protocol's error
-// envelope. The limit holds for the decoded bytes too.
+// decodedRequestBody keeps the one decoded buffer for budget inspection and
+// the route that forwards it. Replacing r.Body deliberately discards this cache.
+// It belongs to this request only, and still closes the original network body.
+type decodedRequestBody struct {
+	*bytes.Reader
+	data     []byte
+	original io.Closer
+}
+
+func (b *decodedRequestBody) Close() error { return b.original.Close() }
+
+// readBoundedRequestBody reads once, with decoded-size admission and limits.
 func readBoundedRequestBody(w http.ResponseWriter, r *http.Request, limits requestLimits) ([]byte, int, error) {
+	if limits.body <= 0 {
+		limits.body = defaultBodyLimit
+	}
+	if kept, ok := r.Body.(*decodedRequestBody); ok {
+		if int64(len(kept.data)) > limits.body {
+			return nil, http.StatusRequestEntityTooLarge, overLimit(limits.body)
+		}
+		return kept.data, 0, nil
+	}
 	controller := http.NewResponseController(w)
 	reject := func(status int, err error) ([]byte, int, error) {
 		// Do not let net/http drain a rejected body from a stalled client.
@@ -167,14 +172,19 @@ func readBoundedRequestBody(w http.ResponseWriter, r *http.Request, limits reque
 		controller.SetReadDeadline(time.Time{})
 		return nil, status, err
 	}
-	if limits.body <= 0 {
-		limits.body = defaultBodyLimit
-	}
 	if limits.readTimeout <= 0 {
 		limits.readTimeout = defaultBodyTimeout
 	}
 	if r.ContentLength > limits.body {
 		return reject(http.StatusRequestEntityTooLarge, overLimit(limits.body))
+	}
+	// Only an identity body's declared length describes decoded memory. Others
+	// acquire room as their output buffer grows, before allocating it.
+	encoding := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Encoding")))
+	if (encoding == "" || encoding == "identity") && r.ContentLength > 0 {
+		if err := bodyRoom.take(r.Context(), r.ContentLength); err != nil {
+			return reject(http.StatusServiceUnavailable, err)
+		}
 	}
 	if err := controller.SetReadDeadline(time.Now().Add(limits.readTimeout)); err != nil && !errors.Is(err, http.ErrNotSupported) {
 		return reject(http.StatusInternalServerError, errors.New("could not set request body deadline"))
@@ -194,7 +204,11 @@ func readBoundedRequestBody(w http.ResponseWriter, r *http.Request, limits reque
 	}
 	original := r.Body
 	r.Body = &idleBody{original, controller, limits.readTimeout}
-	defer func() { r.Body = original }()
+	defer func() {
+		if _, ok := r.Body.(*decodedRequestBody); !ok {
+			r.Body = original
+		}
+	}()
 	rd, err := decodedBody(r)
 	if errors.Is(err, errBodyEncoding) {
 		return reject(http.StatusUnsupportedMediaType, err)
@@ -204,13 +218,19 @@ func readBoundedRequestBody(w http.ResponseWriter, r *http.Request, limits reque
 	}
 	defer rd.Close()
 	// Limit decoded bytes as well.
-	body, err := readSized(io.LimitReader(rd, limits.body+1), declared)
+	body, err := readSizedRoom(io.LimitReader(rd, limits.body+1), declared, limits.body+1, func(n int64) error { return bodyRoom.grow(r.Context(), n) })
 	if int64(len(body)) > limits.body {
 		return reject(http.StatusRequestEntityTooLarge, overLimit(limits.body))
 	}
 	if err != nil {
+		var full *bodyGrowthFull
+		if errors.As(err, &full) || errors.Is(err, context.Canceled) {
+			return reject(http.StatusServiceUnavailable, err)
+		}
 		return readFailure(err)
 	}
+	r.Body = &decodedRequestBody{Reader: bytes.NewReader(body), data: body, original: original}
+	r.ContentLength = int64(len(body))
 	return body, 0, nil
 }
 
@@ -230,28 +250,68 @@ const sizedReadFirst = 1 << 20
 // most about twice what it sent. A body longer than it said reads on, as
 // io.ReadAll would. The error is io.ReadAll's: nil at io.EOF.
 func readSized(r io.Reader, declared int64) ([]byte, error) {
-	if declared <= 0 {
+	return readSizedRoom(r, declared, 0, nil)
+}
+
+// readSizedRoom reserves buffer capacity before allocating it. An unknown
+// decoded size grows in steps; it never waits while holding a partial body,
+// since several such readers could otherwise wait for each other forever.
+func readSizedRoom(r io.Reader, declared, most int64, room func(int64) error) ([]byte, error) {
+	if room == nil && declared <= 0 {
 		return io.ReadAll(r)
 	}
-	b := make([]byte, 0, min(declared, sizedReadFirst))
+	initial := int64(32 << 10)
+	if declared > 0 {
+		initial = min(declared, sizedReadFirst)
+	}
+	if most > 0 {
+		initial = min(initial, most)
+	}
+	if room != nil {
+		if err := room(initial); err != nil {
+			return nil, err
+		}
+	}
+	b := make([]byte, 0, initial)
 	for {
 		if len(b) == cap(b) {
-			if int64(len(b)) >= declared {
-				// all it said has come: look for its end before growing
-				var probe [512]byte
-				n, err := r.Read(probe[:])
-				if n > 0 {
-					b = append(b, probe[:n]...)
-				}
-				if err == io.EOF {
-					return b, nil
-				}
+			// Probe at the boundary before allocating: exact-size bodies do
+			// not reserve another step merely to discover EOF.
+			var probe [1]byte
+			n, err := r.Read(probe[:])
+			if n == 0 {
 				if err != nil {
+					if err == io.EOF {
+						return b, nil
+					}
 					return b, err
 				}
 				continue
 			}
-			b = append(make([]byte, 0, min(int64(cap(b))*2, declared)), b...)
+			next := int64(cap(b)) * 2
+			if declared > int64(len(b)) {
+				next = min(next, declared)
+			}
+			if most > 0 {
+				next = min(next, most)
+			}
+			if next <= int64(cap(b)) {
+				return append(b, probe[0]), nil
+			}
+			if room != nil {
+				if e := room(next); e != nil {
+					return b, e
+				}
+			}
+			grown := make([]byte, len(b), next)
+			copy(grown, b)
+			b = append(grown, probe[0])
+			if err != nil {
+				if err == io.EOF {
+					return b, nil
+				}
+				return b, err
+			}
 		}
 		n, err := r.Read(b[len(b):cap(b)])
 		b = b[:len(b)+n]

@@ -1,9 +1,7 @@
 package gateway
 
 import (
-	"bytes"
 	"errors"
-	"io"
 	"net/http"
 	"slices"
 	"strconv"
@@ -50,7 +48,6 @@ func keyLimited(next http.Handler) http.Handler {
 				writeError(w, protoOfPath(r.URL.Path), status, err.Error())
 				return
 			}
-			r.Body, r.ContentLength = io.NopCloser(bytes.NewReader(b)), int64(len(b))
 			size, model = int64(len(b)), budget.ModelOf(b)
 		}
 		now := limitClock()

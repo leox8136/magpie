@@ -416,6 +416,21 @@ process-wide ledger load still reads the JSONL file. Settlement and window
 initialization for the same key retain their ordering, so the persisted call
 enters each cached window once.
 
+The budget pre-read and the route share one decoded request buffer
+(`decodedRequestBody`, `readBoundedRequestBody`). Later reads still enforce
+their own size limit; replacing `r.Body` discards the cached buffer. The
+network body is closed with the request's wrapper. Decoded memory admission
+now applies to budget pre-reads too. Identity bodies acquire their declared
+room before reading. Compressed or unknown-length bodies acquire room before
+each output-buffer allocation; growth that cannot fit beside other requests
+is refused with 503 rather than queuing with partial output, which could
+deadlock concurrent growing readers. One oversized body may still run alone,
+small buffers stay below `bodyRoomFree`, and cancellation releases held room.
+This limits decoded buffers, not total process RSS or decoder working memory.
+Tests: `TestBudgetBodySharesAdmissionAndBytes`,
+`TestDecodedBodyGrowthRespectsRoom`, the encoding, body deadline and body-room
+regressions; comparison benchmark: `BenchmarkBudgetRequestBody`.
+
 `GET /v1/magpie/limit` (`keyLimit` in
 [`key_limit.go`](../../internal/gateway/key_limit.go)) answers the limit of
 the gateway key the request carries (`access.Caller`) and of no other: it

@@ -46,6 +46,48 @@ type bodyWaiter struct {
 
 var bodyRoom = &bodyRoomT{}
 
+// A growing decoder cannot queue holding its partial output: another growing
+// decoder might hold the bytes it needs. Refuse before the next allocation.
+type bodyGrowthFull struct{ requested, held, room int64 }
+
+func (e *bodyGrowthFull) Error() string {
+	return fmt.Sprintf("request body needs %d MiB while %d MiB of %d MiB is held; decoded memory is full, so the provider was not asked", e.requested>>20, e.held>>20, e.room>>20)
+}
+
+func (b *bodyRoomT) grow(ctx context.Context, n int64) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if n < bodyRoomFree || ctx.Done() == nil {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.sized {
+		b.sized = true
+		b.room, b.why = bodyRoomSize()
+	}
+	if b.room <= 0 {
+		return nil
+	}
+	h, known := b.by[ctx]
+	if n <= h {
+		return nil
+	}
+	if (!known && len(b.queue) > 0) || b.held > h && b.held+n-h > b.room {
+		return &bodyGrowthFull{n, b.held, b.room}
+	}
+	if b.by == nil {
+		b.by = map[context.Context]int64{}
+	}
+	b.by[ctx] = n
+	b.held += n - h
+	if !known {
+		context.AfterFunc(ctx, func() { b.give(ctx) })
+	}
+	return nil
+}
+
 // bodyRoomFree is the size a body takes room from; smaller ones pass.
 const bodyRoomFree = 1 << 20
 
