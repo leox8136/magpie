@@ -1128,6 +1128,17 @@ the row of the entry that id reaches, with its label, under the bare id.
 
 ## Verification
 
+`BenchmarkEnterpriseGatewayHTTP` measures real local client HTTP through
+`Server.Front` to a fake HTTP supplier, with streaming/non-streaming,
+1/16 callers and disabled/nonbinding caller caps. It counts only completed
+200 responses, reports p50/p95/p99, successful requests/s and allocations.
+Both HTTP peers run in the benchmark process; this is a local regression
+baseline, not production capacity, peak RSS or a vendor latency measurement.
+
+```sh
+go test -tags nogui ./internal/gateway -run '^$' -bench BenchmarkEnterpriseGatewayHTTP -benchmem -benchtime=1s -count=3
+```
+
 The key and ledger benchmarks use synthetic data: authentication after a
 100,000-key store update, and single-key reads from about 100,000 ledger
 records. The ledger index benchmark excludes initial file parsing; the
