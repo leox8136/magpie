@@ -1,5 +1,16 @@
 # Notes for coding agents
 
+## This branch's direction
+
+This branch focuses on an enterprise gateway, prioritizing performance and
+stability. Evaluate upstream changes by their value to request forwarding,
+throughput, latency, resource usage, caller-key isolation, budget enforcement,
+concurrency, streaming, failover and account-state correctness.
+
+Usage/Sessions page polling and desktop UI optimizations are low priority
+unless they also improve the gateway workload or address a concrete need.
+Do not assume a page benchmark demonstrates a gain in gateway performance.
+
 ## Subsystem design and review
 
 Before changing a documented subsystem, read its
