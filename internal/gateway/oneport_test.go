@@ -27,7 +27,8 @@ func TestClientPathCoversHandler(t *testing.T) {
 	end := strings.Index(string(src)[start:], "\n}\n")
 	body := string(src)[start : start+end]
 	consts := map[string]string{
-		"claudeMCPPath": claudeMCPPath, "CodexPath": CodexPath, "CodexCatalogPath": CodexCatalogPath,
+		"accountingPath": accountingPath,
+		"claudeMCPPath":  claudeMCPPath, "CodexPath": CodexPath, "CodexCatalogPath": CodexCatalogPath,
 		"AlphaSearchPath": AlphaSearchPath, "HeapPath": HeapPath, "CPUPath": CPUPath,
 		"GoroutinesPath": GoroutinesPath, "ClaudeRunsPath": ClaudeRunsPath, "SearchMCPPath": SearchMCPPath, "VisionMCPPath": VisionMCPPath,
 		"ImageMCPPath": ImageMCPPath, "ImageMCPFiles": ImageMCPFiles,

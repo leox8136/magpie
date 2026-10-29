@@ -260,8 +260,8 @@ var mu sync.Mutex
 // reads the gateway's calls from its index instead.
 var loads int
 
-// Append writes one record. Errors are swallowed: accounting must never
-// break a call.
+// Append records one call without changing its completed response. Failed
+// writes trip ledger health and keep bounded pending bytes for explicit retry.
 func Append(r Record) {
 	if r.Time.IsZero() {
 		r.Time = Clock()
@@ -272,27 +272,25 @@ func Append(r Record) {
 	defer codexUsedNew(r)
 	b, err := json.Marshal(r)
 	if err != nil {
+		mu.Lock()
+		ledgerState(Path()).fail(nil, fmt.Errorf("encode accounting record: %w", err), true)
+		mu.Unlock()
 		return
 	}
 	mu.Lock()
 	defer mu.Unlock()
 	path := Path()
-	f, before := openLog(path)
-	if f == nil {
-		return
-	}
-	if !holdLog {
-		defer f.Close()
-	}
-	if _, err := f.Write(append(b, '\n')); err != nil {
-		if holdLog {
-			f.Close()
-			heldLog.f = nil
+	state := ledgerState(path)
+	line := append(b, '\n')
+	if state.status.Load().Error != "" {
+		if !r.IsRejected() && !r.IsProbe() {
+			state.enqueue(line)
 		}
 		return
 	}
-	after, _ := statLogHandle(f)
-	noteLogAppend(path, before, after)
+	if n, err := writeLedgerLine(path, line); err != nil {
+		state.fail(line, err, n > 0)
+	}
 }
 
 // heldLog is the log Append keeps open between calls, under mu: every
@@ -310,7 +308,7 @@ const holdLog = runtime.GOOS != "windows"
 
 // openLog returns the log to append to and its state before the write,
 // or nil when it can't be opened.
-func openLog(path string) (*os.File, os.FileInfo) {
+func openLog(path string) (*os.File, os.FileInfo, error) {
 	if f := heldLog.f; f != nil {
 		heldLog.f = nil
 		if heldLog.path == path {
@@ -318,7 +316,7 @@ func openLog(path string) (*os.File, os.FileInfo) {
 			now, nerr := statLogFile(path)
 			if err == nil && nerr == nil && sameLogFile(before, now) {
 				heldLog.f = f
-				return f, before
+				return f, before, nil
 			}
 		}
 		f.Close()
@@ -330,13 +328,13 @@ func openLog(path string) (*os.File, os.FileInfo) {
 		f, err = os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	}
 	if err != nil {
-		return nil, nil
+		return nil, nil, err
 	}
 	before, _ := statLogHandle(f)
 	if holdLog {
 		heldLog.path, heldLog.f = path, f
 	}
-	return f, before
+	return f, before, nil
 }
 
 // IsRejected also recognizes local rejections written before the explicit flag.

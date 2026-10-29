@@ -435,6 +435,30 @@ instead of zero consumption. Tests: `TestUnreadableBudgetNeverStartsAtZero`,
 `gateway-budget-unknown.test.cjs`. Comparison benchmark:
 `BenchmarkBudgetColdWindows`.
 
+Accounting append failures also close admission for every budgeted key,
+even when its window is warm (`usage.LedgerWriteHealth`). The completed
+model response is preserved; already admitted requests may finish. Keys
+without budgets continue. `budget.All` marks usage unknown with the same
+503 contract. The writer keeps at most 1,024 serialized records and 16 MiB
+in this process and writes a `usage.jsonl.write-failed` marker. If the marker
+cannot be written, health reports `markerError`; restart protection then
+cannot be guaranteed. This is failure detection and bounded recovery, not
+transactional billing or a power-loss durability guarantee.
+
+An administrator reads `GET /v1/magpie/accounting` and explicitly retries
+`POST /v1/magpie/accounting/retry` on the serving process. Both reject browser
+requests and tenant-scoped keys. The CLI uses these endpoints, never a
+second process's pending queue. Retry removes each confirmed append from
+pending immediately, syncs the file and removes the marker before reopening
+admission; observers and budget settlement are not replayed. A partial write,
+queue overflow, encoding failure or marker from an earlier process requires
+offline reconciliation, not automatic replay. Pending record bytes are in
+RAM and do not survive a restart: reconcile the ledger and failure marker
+while the gateway is stopped before starting it again. Tests:
+`TestFailedAccountingBlocksWarmBudget`, `TestAccountingAdminPermissions`,
+`TestLedgerRetry*`, `TestLedgerShortWriteNeverBlindlyReplayed`,
+`TestLedgerPendingQueueIsBounded` and `TestLedgerHealthDoesNotWaitForAppend`.
+
 The budget pre-read and the route share one decoded request buffer
 (`decodedRequestBody`, `readBoundedRequestBody`). Later reads still enforce
 their own size limit; replacing `r.Body` discards the cached buffer. The

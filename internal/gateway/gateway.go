@@ -728,6 +728,8 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 // Handler routes the client APIs.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET "+accountingPath, s.accountingHealth)
+	mux.HandleFunc("POST "+accountingPath+"/retry", s.accountingRetry)
 	mux.HandleFunc("GET /{$}", s.info)
 	// an OpenAI-compatible base URL answers too: Empryo lists a provider with
 	// no key of its own only when its baseURL does

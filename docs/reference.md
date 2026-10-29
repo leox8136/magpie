@@ -628,7 +628,18 @@ magpie gateway-key models <id> all     # every model
 magpie gateway-key accounts <id> codex/me@example.com   # only these accounts
 magpie gateway-key accounts <id> all    # every account
 magpie gateway-key quotas <id> on      # told the quotas of what it may use
+magpie gateway-key accounting           # serving process's write health
+magpie gateway-key accounting retry     # explicitly retry pending writes
 ```
+
+Accounting write failures preserve the completed reply and stop subsequent
+budgeted requests with 503 until recovery. `accounting retry` asks the running
+gateway to retry its bounded RAM queue; it does not replay billing observers.
+Partial writes, dropped records and an earlier process's failure marker need
+offline reconciliation. Pending bytes do not survive restart. See the
+[accounting recovery contract](subsystems/gateway-routing.md) for limits and
+marker failure behavior. Both accounting endpoints require administrator
+access and refuse browser and tenant-scoped keys.
 
 Each gateway key can have its own **limit**: a token total, an estimated
 cost in US$, or both, per day, week or month (calendar windows in local

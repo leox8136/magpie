@@ -298,6 +298,9 @@ func All(k access.Key, now time.Time) []Status {
 		}
 	}
 	err := readWindows(k.ID, windows)
+	if h := usage.LedgerWriteHealth(); h.Error != "" {
+		err = fmt.Errorf("accounting writes are unavailable; ask the gateway administrator to recover the ledger")
+	}
 	state := stateFor(k.ID)
 	state.Lock()
 	defer state.Unlock()
@@ -419,6 +422,9 @@ func Reserve(who access.Identity, body int64, model string, now time.Time) (rele
 	state := stateFor(who.KeyID)
 	state.Lock()
 	defer state.Unlock()
+	if h := usage.LedgerWriteHealth(); h.Error != "" {
+		return nil, &Refusal{Key: who.KeyName, err: fmt.Errorf("%w: accounting writes are unavailable; ask the gateway administrator to recover the ledger", ErrUsageUnavailable)}
+	}
 	ss, err := sumsFor(state, who.KeyID, starts)
 	if err != nil {
 		return nil, &Refusal{Key: who.KeyName, err: fmt.Errorf("%w: %v", ErrUsageUnavailable, err)}
