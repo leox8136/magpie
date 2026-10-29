@@ -32,6 +32,20 @@ For a moved subscription, its built-in upstream implementation does not run. Plu
 
 Quota aggregation in [`quotas.go`](../../internal/provider/quotas.go) suppresses a key's GLM Coding Plan card only when its comparable reset windows match a ZCode subscription card: built-in or moved `zcode`, or independently installed `zcode-plugin`. [`PlanQuotas`](../../internal/provider/planquota.go) identifies GLM plans by their quota endpoint, including custom provider ids. Matching reset schedules from unrelated vendors do not hide cards. Within this pair, resets remain a heuristic for the shared account; a plan's `User` is a key label or mask, not a login identity. Errors, conflicting resets, or no comparable resets keep the plan visible. This applies to the Usage page, tray, quota reports, alerts, and quota waits; it does not change plugin ownership or upstream requests.
 
+## Plugin request sign-in status
+
+`notePluginSignIn` in [`plugins.go`](../../internal/provider/plugins.go) consumes
+`X-Magpie-Sign-In`: `expired` marks an account lapsed, `kept` preserves its
+state, and `renewed` clears the mark. The header is removed before the reply
+reaches the client. Without the header, a success clears the mark and a 401
+normally marks it lapsed. A 401 whose message only says the model is unavailable
+or unsupported now preserves the sign-in instead; token, credential, login or
+expiry wording still marks it lapsed. `modelOnly401` reads at most 64 KiB and
+restores the entire body for the gateway's normal model refusal and fallback
+handling. `TestPluginModel401KeepsSignIn` covers model and credential refusals
+and preservation of the response body; `TestPluginSaysSignIn` in the gateway
+covers explicit header precedence.
+
 ## Usage a plugin collects late
 
 A plugin that learns a step's usage only after the step has ended reports it with a later step, in `usage.magpie_deferred` (`prompt_tokens`, `completion_tokens`, `cached_tokens`, `cache_write_tokens`) beside that step's own usage fields. The Cursor plugin does this: a tool step's usage event shows seconds after the step, so the step says 0 and the conversation's next step collects the event ([#1053](https://github.com/yetone/magpie/issues/1053)).
