@@ -258,6 +258,13 @@ asks it.
 | `plugins/budget` | Requires `settings` and `gateway`, Essential. Apply serves `budget.Limiter`, `internal/budget`'s windows and reservations as before. `InUse` counts the gateway keys with a limit (`access.List`); a keys file that can't be read is an error, so it stays on. Since it is in use whenever a key has a limit, it can only be off while none has; the 503 is for a refresh not yet seen or a plugins.yml edited by hand. The gateway's `KeepFresh` watches the keys file too, so a limit set from the CLI or the window turns it on within 2s. | [`budget.go`](../../plugins/budget/budget.go) |
 | Stays in the core | What a key has used and has left (`budget.All`, `budget.Binding`) for `/v1/magpie/limit`, the Gateway page and the CLI, and `budget.Append`, so the usage ledger counts a key's use the same with the plugin on or off. The key editor's limit fields stay with the plugin off, since setting a limit is what turns it back on. | [`budget.go`](../../internal/budget/budget.go) |
 
+The built-in budget limiter also refuses an unknown cold ledger read
+(`budget.ErrUsageUnavailable`). `reserveFor` distinguishes this from an
+exhausted allowance: the chat API returns 503
+`gateway_key_usage_unavailable`, with no quota reset header; MCP callers
+receive the unavailable error and send no upstream request. See
+[budget read and request-body contracts](gateway-routing.md).
+
 ## P4: community plugins at every point
 
 P4 opens each extension point, the gateway's and the window's, to

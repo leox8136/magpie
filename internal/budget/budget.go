@@ -32,6 +32,7 @@ package budget
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -124,11 +125,11 @@ func counts(r usage.Record) bool { return !r.IsRejected() && !r.IsReported() && 
 // are let go. A window two limits share (a day and a week on a Monday,
 // a day and a month on the 1st) is kept once, as Append adds a call to
 // each one kept (#2942). Called with state held.
-func sumsFor(state *keyBudget, keyID string, starts []time.Time) []*sums {
+func sumsFor(state *keyBudget, keyID string, starts []time.Time) ([]*sums, error) {
 	k := slot(keyID)
 	kept := state.sums[k]
 	out := make([]*sums, len(starts))
-	var next []*sums
+	var next, missing []*sums
 	at := func(ss []*sums, start time.Time) int {
 		return slices.IndexFunc(ss, func(s *sums) bool { return s.start.Equal(start) })
 	}
@@ -140,25 +141,46 @@ func sumsFor(state *keyBudget, keyID string, starts []time.Time) []*sums {
 		if j := at(kept, start); j >= 0 {
 			out[i] = kept[j]
 		} else {
-			out[i] = read(keyID, start)
+			out[i] = &sums{start: start}
+			missing = append(missing, out[i])
 		}
 		next = append(next, out[i])
 	}
+	if err := readWindows(keyID, missing); err != nil {
+		return nil, err
+	}
 	state.sums[k] = next
-	return out
+	return out, nil
 }
 
-func read(keyID string, start time.Time) *sums {
-	s := &sums{start: start}
+// readWindows reads and prices each matching record once for all missing
+// windows. Nothing is published until the entire checked read succeeds.
+func readWindows(keyID string, windows []*sums) error {
+	if len(windows) == 0 {
+		return nil
+	}
+	start := windows[0].start
+	for _, w := range windows[1:] {
+		if w.start.Before(start) {
+			start = w.start
+		}
+	}
 	cost := usage.NewCoster()
-	usage.VisitKey(keyID, start, func(r usage.Record) {
-		if r.CallerKeyID == keyID && counts(r) && !r.Time.Before(start) {
-			c, ok := cost(r)
-			s.add(r, c, ok)
+	return usage.VisitKeyChecked(keyID, start, func(r usage.Record) {
+		if !counts(r) {
+			return
+		}
+		c, ok := cost(r)
+		for _, w := range windows {
+			if !r.Time.Before(w.start) {
+				w.add(r, c, ok)
+			}
 		}
 	})
-	return s
 }
+
+// ErrUsageUnavailable identifies a budget that cannot be established safely.
+var ErrUsageUnavailable = errors.New("gateway key usage is unavailable")
 
 // Forget drops what is kept in memory, as a restart would.
 func Forget() {
@@ -196,6 +218,7 @@ func Append(rec usage.Record) {
 
 // Status is a key's limit and what it has used of it.
 type Status struct {
+	Error  string `json:"error,omitempty"` // usage is unknown, not zero, when set
 	Period string `json:"period"`
 	// Days is a "days" period's cycle, Hours an "hours" one's
 	Days     int       `json:"days,omitempty"`
@@ -253,20 +276,37 @@ func Of(k access.Key, now time.Time) *Status {
 // limits share is read once.
 func All(k access.Key, now time.Time) []Status {
 	ls := k.Limits()
+	if len(ls) == 0 {
+		return nil
+	}
 	var out []Status
-	read1 := map[int64]*sums{}
-	for _, l := range ls {
-		start, reset := l.Window(now)
-		s := read1[start.Unix()]
-		if s == nil {
-			s = read(k.ID, start)
-			read1[start.Unix()] = s
+	starts := make([]time.Time, len(ls))
+	resets := make([]time.Time, len(ls))
+	var windows []*sums
+	ss := make([]*sums, len(ls))
+	for i, l := range ls {
+		starts[i], resets[i] = l.Window(now)
+		for _, w := range windows {
+			if w.start.Equal(starts[i]) {
+				ss[i] = w
+				break
+			}
 		}
-		state := stateFor(k.ID)
-		state.Lock()
-		h := state.held[window{slot(k.ID), start.Unix()}]
-		out = append(out, status(k.ID, l, s, h, reset))
-		state.Unlock()
+		if ss[i] == nil {
+			ss[i] = &sums{start: starts[i]}
+			windows = append(windows, ss[i])
+		}
+	}
+	err := readWindows(k.ID, windows)
+	state := stateFor(k.ID)
+	state.Lock()
+	defer state.Unlock()
+	for i, l := range ls {
+		st := status(k.ID, l, ss[i], state.held[window{slot(k.ID), starts[i].Unix()}], resets[i])
+		if err != nil {
+			st.Error = fmt.Sprintf("%s: %v", ErrUsageUnavailable, err)
+		}
+		out = append(out, st)
 	}
 	return out
 }
@@ -280,6 +320,8 @@ func Binding(all []Status) *Status {
 		st := &all[i]
 		switch {
 		case b == nil:
+			b = st
+		case st.Error != "":
 			b = st
 		case st.Spent != b.Spent:
 			if st.Spent {
@@ -312,11 +354,17 @@ func (st *Status) share() float64 {
 type Refusal struct {
 	Status
 	Key string
+	err error
 }
 
-// Error says it as a client is told: the key, what it used of which
-// cap, and when it resets.
+// Unwrap identifies a failed ledger read independently of quota exhaustion.
+func (r *Refusal) Unwrap() error { return r.err }
+
+// Error names the exhausted cap, or why the budget could not be established.
 func (r *Refusal) Error() string {
+	if r.err != nil {
+		return fmt.Sprintf("cannot read gateway key %q usage; nothing was sent: %v", r.Key, r.err)
+	}
 	what := ""
 	if r.TokenLimit > 0 && r.Tokens+r.Reserved >= r.TokenLimit {
 		counted := "input, output and cache-write tokens"
@@ -371,7 +419,10 @@ func Reserve(who access.Identity, body int64, model string, now time.Time) (rele
 	state := stateFor(who.KeyID)
 	state.Lock()
 	defer state.Unlock()
-	ss := sumsFor(state, who.KeyID, starts)
+	ss, err := sumsFor(state, who.KeyID, starts)
+	if err != nil {
+		return nil, &Refusal{Key: who.KeyName, err: fmt.Errorf("%w: %v", ErrUsageUnavailable, err)}
+	}
 	heldAt := func(start time.Time) *held { return state.held[window{slot(who.KeyID), start.Unix()}] }
 	// every limit is asked: of those with nothing left, the one that
 	// resets last is the one the client is told, as it is refused until then

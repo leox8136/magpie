@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strconv"
@@ -55,7 +56,9 @@ func keyLimited(next http.Handler) http.Handler {
 		if err != nil {
 			status, errType := http.StatusServiceUnavailable, "gateway_key_limit_off"
 			var refused gwbudget.Refusal
-			if errors.As(err, &refused) {
+			if errors.Is(err, budget.ErrUsageUnavailable) {
+				status, errType = http.StatusServiceUnavailable, "gateway_key_usage_unavailable"
+			} else if errors.As(err, &refused) {
 				status, errType = http.StatusTooManyRequests, "gateway_key_limit"
 				w.Header().Set("Retry-After", strconv.Itoa(refused.RetryAfter(now)))
 				w.Header().Set(remoteKeyLimitHeader, refused.ResetAt().Format(time.RFC3339))
@@ -87,6 +90,9 @@ func reserveFor(who access.Identity, size int64, model string, now time.Time) (r
 	}
 	release, refused := l.Reserve(who, size, model, now)
 	if refused != nil {
+		if errors.Is(refused, budget.ErrUsageUnavailable) {
+			return nil, fmt.Errorf("%w: %s", budget.ErrUsageUnavailable, refused)
+		}
 		return nil, refused
 	}
 	return release, nil
@@ -117,5 +123,11 @@ func (s *Server) keyLimit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	all := budget.All(access.Key{ID: who.KeyID, Name: who.KeyName, Limit: who.Limit, More: who.More}, limitClock())
+	for _, st := range all {
+		if st.Error != "" {
+			writeError(w, protoOfPath(r.URL.Path), http.StatusServiceUnavailable, st.Error)
+			return
+		}
+	}
 	writeJSON(w, 200, map[string]any{"limited": true, "key": who.KeyName, "limit": budget.Binding(all), "limits": all})
 }

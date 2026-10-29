@@ -238,6 +238,11 @@ func gatewayKeyLimit(out io.Writer, args []string) error {
 	}
 	k, now := keys[i], time.Now()
 	all := budget.All(k, now)
+	for _, st := range all {
+		if st.Error != "" {
+			return fmt.Errorf("%s", st.Error)
+		}
+	}
 	if len(all) == 0 {
 		_, err = fmt.Fprintf(out, "%s: no limit\n", k.Name)
 		return err
@@ -402,6 +407,10 @@ func limitWords(k access.Key, now time.Time) string {
 	}
 	var each []string
 	for _, st := range all {
+		if st.Error != "" {
+			each = append(each, "usage unavailable")
+			continue
+		}
 		var parts []string
 		if st.TokenLimit > 0 {
 			parts = append(parts, fmt.Sprintf("%d/%d tokens", st.Tokens, st.TokenLimit))

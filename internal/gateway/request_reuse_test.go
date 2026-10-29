@@ -6,6 +6,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -13,7 +15,56 @@ import (
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/budget"
 	"github.com/yetone/magpie/internal/gwbudget"
+	"github.com/yetone/magpie/internal/usage"
 )
+
+func TestBudgetUnreadableThroughHTTP(t *testing.T) {
+	fresh(t)
+	budget.Forget()
+	calls := limitedUpstream(t, 0)
+	keys, secrets := newCaller(t, "Capped")
+	setLimit(t, keys[0].ID, &access.Limit{Period: "day", Tokens: 10000})
+	if err := os.MkdirAll(filepath.Dir(usage.Path()), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(usage.Path(), []byte("broken ledger\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	gw := httptest.NewServer(New().Front())
+	defer gw.Close()
+	for _, method := range []string{"POST", "GET"} {
+		path := "/v1/chat/completions"
+		if method == "GET" {
+			path = "/v1/magpie/limit"
+		}
+		req, _ := http.NewRequest(method, gw.URL+path, strings.NewReader(chatReq))
+		req.Header.Set("Authorization", "Bearer "+secrets[0])
+		resp, err := gw.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != 503 || resp.Header.Get(remoteKeyLimitHeader) != "" {
+			t.Fatalf("%s: got %d, reset %q", method, resp.StatusCode, resp.Header.Get(remoteKeyLimitHeader))
+		}
+	}
+	if calls.Load() != 0 {
+		t.Fatal("unknown budget reached upstream")
+	}
+	if err := os.WriteFile(usage.Path(), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	req, _ := http.NewRequest("POST", gw.URL+"/v1/chat/completions", strings.NewReader(chatReq))
+	req.Header.Set("Authorization", "Bearer "+secrets[0])
+	resp, err := gw.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 || calls.Load() != 1 {
+		t.Fatalf("repair: %d, calls %d", resp.StatusCode, calls.Load())
+	}
+}
 
 func TestBudgetBodySharesAdmissionAndBytes(t *testing.T) {
 	for _, encoding := range []string{"identity", "gzip", "zstd", "chunked"} {

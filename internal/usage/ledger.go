@@ -6,6 +6,7 @@ package usage
 
 import (
 	"encoding/csv"
+	"fmt"
 	"io"
 	"slices"
 	"sort"
@@ -1123,6 +1124,21 @@ func Visit(since time.Time, fn func(Record)) { readLogSnapshot().visit(since, fn
 // entirely to other callers. File changes use the same index refresh as Visit.
 func VisitKey(key string, since time.Time, fn func(Record)) {
 	readLogSnapshot().visitKey(key, since, fn)
+}
+
+// VisitKeyChecked is VisitKey for admission decisions. A missing ledger is
+// empty; failed reads, malformed complete records, an unfinished tail or a
+// failed fingerprint are unknown. No callbacks run for an unknown snapshot.
+func VisitKeyChecked(key string, since time.Time, fn func(Record)) error {
+	s := readLogSnapshot()
+	if s.readErr != nil {
+		return s.readErr
+	}
+	if s.info != nil && (s.off != s.info.Size() || s.hash == "") {
+		return fmt.Errorf("usage ledger is incomplete or changed during its read")
+	}
+	s.visitKey(key, since, fn)
+	return nil
 }
 
 // NewCoster prices one record at a time at the effective prices the

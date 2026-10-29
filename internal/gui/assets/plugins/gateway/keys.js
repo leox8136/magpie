@@ -493,7 +493,7 @@ function gatewayLimitBadge(k) {
   const u = bindingUsed(k), more = keyUsed(k).length - 1;
   const b = el("button", "amodels limit" + (u ? " set" : "") + (u?.spent ? " spent" : "") + (gatewayLimit?.id === k.id ? " open" : ""));
   b.type = "button";
-  if (!u) b.textContent = t("Limit");
+  if (!u || u.error) b.textContent = t("Limit");
   else {
     const parts = [];
     if (u.tokenLimit) parts.push(fmtN(u.tokens) + " / " + fmtN(u.tokenLimit));
@@ -501,7 +501,7 @@ function gatewayLimitBadge(k) {
     b.textContent = (u.spent ? t("Spent") + " · " : "") + parts.join(" · ") + " · " + perWords(u.period, u.days, u.hours)
       + (more > 0 ? " · " + t(more === 1 ? "+1 limit" : "+{n} limits", { n: more }) : "");
   }
-  b.title = t(u ? "Change this key's limit" : "Set a limit for this key");
+  b.title = u?.error || t(u ? "Change this key's limit" : "Set a limit for this key");
   b.setAttribute("aria-label", b.title);
   b.setAttribute("aria-expanded", gatewayLimit?.id === k.id ? "true" : "false");
   b.onclick = (e) => {
@@ -518,6 +518,7 @@ function gatewayLimitBadge(k) {
 // window first.
 function gatewayLimitLine(k, u) {
   const line = el("div", "key-limit" + (u.spent ? " spent" : ""));
+  if (u.error) { line.textContent = u.error; return line; }
   const parts = [];
   if (keyUsed(k).length > 1) parts.push(perWords(u.period, u.days, u.hours));
   if (u.tokenLimit) parts.push(t("{used} of {limit} tokens · {left} left", { used: fmtN(u.tokens), limit: fmtN(u.tokenLimit), left: fmtN(u.tokensLeft) }));

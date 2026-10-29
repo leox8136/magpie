@@ -416,6 +416,25 @@ process-wide ledger load still reads the JSONL file. Settlement and window
 initialization for the same key retain their ordering, so the persisted call
 enters each cached window once.
 
+Budget cold reads now initialize all missing windows in one checked pass
+from the earliest start (`budget.readWindows`, `usage.VisitKeyChecked`),
+pricing each record once and retaining the ledger's summation order per
+window. Caller-key reads reuse one decoding buffer across matching blocks;
+unrelated blocks are still skipped. A missing ledger is empty. A failed
+read or fingerprint, malformed complete record, or unfinished final line is
+unknown: a cold reservation is refused with 503
+`gateway_key_usage_unavailable`, without a quota reset header or an upstream
+request. Failed reads publish neither cached window sums nor a current
+ledger snapshot; repair is retried by the next cold read. Warm windows
+continue to use their already established in-process sums and synchronous
+settlement. `budget.All` reports unknown usage in `Status.Error`;
+`GET /v1/magpie/limit` returns 503, and the CLI and key editor show the error
+instead of zero consumption. Tests: `TestUnreadableBudgetNeverStartsAtZero`,
+`TestBudgetUnreadableThroughHTTP`, `TestBudgetWindowsMatchIndependentReads`,
+`TestCheckedKeyReadRejectsUnknownHashAndRecovers` and
+`gateway-budget-unknown.test.cjs`. Comparison benchmark:
+`BenchmarkBudgetColdWindows`.
+
 The budget pre-read and the route share one decoded request buffer
 (`decodedRequestBody`, `readBoundedRequestBody`). Later reads still enforce
 their own size limit; replacing `r.Body` discards the cached buffer. The

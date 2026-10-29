@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -34,6 +35,7 @@ const (
 // for 750k calls, on every refresh and filter of the Requests page.
 
 type logSnapshot struct {
+	readErr error // a failed or malformed read is unknown to budget readers
 	bytes   int64
 	settled bool
 	path    string
@@ -107,7 +109,13 @@ func readLogSnapshot() *logSnapshot {
 	info, err := statLogFile(path)
 	settled := settledLogStamp(info, start)
 	old := logIndex.snapshot
-	unchanged := old != nil && old.path == path && (err != nil && old.info == nil || err == nil && sameLogInfo(old.info, info))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return &logSnapshot{path: path, readErr: err}
+	}
+	if err == nil && !info.Mode().IsRegular() {
+		return &logSnapshot{path: path, readErr: errors.New("usage ledger is not a regular file")}
+	}
+	unchanged := old != nil && old.readErr == nil && old.path == path && (err != nil && old.info == nil || err == nil && sameLogInfo(old.info, info))
 	if unchanged && info != nil {
 		if logChangeStamp(info) == "" || !old.settled {
 			unchanged = old.hash != "" && logRecordHash(path, old.off) == old.hash
@@ -143,6 +151,7 @@ func readLogSnapshot() *logSnapshot {
 	sum := sha256.New()
 	if continued && resumeLogHash(sum, old.digest) {
 		next.off, next.first, next.firstOwn = old.off, old.first, old.firstOwn
+		next.readErr = old.readErr
 		next.blocks = slices.Clone(old.blocks)
 		next.callers = slices.Clone(old.callers)
 		next.keyProviders = maps.Clone(old.keyProviders)
@@ -152,10 +161,12 @@ func readLogSnapshot() *logSnapshot {
 	logIndex.reads++
 	f, err := os.Open(path)
 	if err != nil {
+		next.readErr = err
 		return next
 	} // never publish an incomplete read as current
 	defer f.Close()
 	if _, err = f.Seek(next.off, 0); err != nil {
+		next.readErr = err
 		return next
 	}
 	var tail *rowChunk
@@ -172,12 +183,16 @@ func readLogSnapshot() *logSnapshot {
 	for next.off < info.Size() {
 		b, e := rd.ReadBytes('\n')
 		if e != nil {
+			if e != io.EOF {
+				next.readErr = e
+			}
 			break
 		} // a partial final line is read again after it completes
 		next.off += int64(len(b))
 		sum.Write(b)
 		var r Record
 		if json.Unmarshal(b, &r) != nil {
+			next.readErr = fmt.Errorf("invalid usage record ending at byte %d", next.off)
 			continue
 		}
 		next.sawHost(r)
@@ -233,7 +248,9 @@ func readLogSnapshot() *logSnapshot {
 	for _, callers := range next.callers {
 		next.bytes += callers.bytes
 	}
-	logIndex.snapshot = next
+	if next.readErr == nil && next.off == info.Size() && next.hash != "" {
+		logIndex.snapshot = next
+	}
 	return next
 }
 
@@ -405,6 +422,8 @@ func blockCallers(c *rowChunk) callerBlock {
 }
 
 func (s *logSnapshot) visitKey(key string, since time.Time, fn func(Record)) {
+	rows := chunkRows{}
+	defer rows.release()
 	for i, packed := range s.blocks {
 		if packed.Latest.Before(since) {
 			continue
@@ -412,10 +431,7 @@ func (s *logSnapshot) visitKey(key string, since time.Time, fn func(Record)) {
 		if _, found := slices.BinarySearch(s.callers[i].ids, key); !found {
 			continue
 		}
-		c := packed.unpack()
-		if c == nil {
-			continue
-		}
+		c := rows.of(packed)
 		for j := range c.Rows {
 			p := &c.Rows[j]
 			if !p.Time.Before(since) && c.Strings[c.text(p, rowCallerKey)] == key {
