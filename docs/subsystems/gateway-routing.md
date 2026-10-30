@@ -1214,3 +1214,13 @@ go test -tags nogui ./internal/provider -run 'TestGroup|TestCodexCreditsSwitch|T
 
 The gateway's `TestMain` gives the package a home of its own, so these tests
 never read real providers or accounts.
+
+## Remote quota authority and Chat/Messages compatibility
+
+A model rest from another magpie (`Rest.there`, `remoteModelRest` in
+[`routing.go`](../../internal/gateway/routing.go)) still orders that candidate
+behind ready alternatives, but `quotaHeld` never replays its old quota/credit
+refusal without asking the remote. Its routing group may have changed there.
+A remote gateway-key limit still holds the key locally; verification holds
+keep their existing behavior. `TestRemoteMagpieQuotaIsAskedNotReplayed`,
+`TestHandAddedMagpieQuotaIsAskedNotReplayed`, `TestRemoteMagpieKeyLimitRestsTheKey`.

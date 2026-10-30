@@ -1020,14 +1020,18 @@ func restingOf(c candidate) (Rest, bool) {
 // exhausted" for the moment it switched upstreams, and every request,
 // the agent's retry first, was answered from its 15-minute rest. A
 // subscription account isn't held so: its resets may be spent for it
-// (autoReset), and its windows are read again as it is planned.
+// (autoReset), and its windows are read again as it is planned. Nor is a
+// model of another computer's magpie (Rest.there): that magpie holds its
+// own rests, and the user may have changed what it serves since
+// (zaidu259434 on X: a group there moved off a spent vendor, and its
+// refusal was still given here until the time it named).
 func quotaHeld(cs []candidate) (Rest, time.Time, bool) {
 	var first Rest
 	var back time.Time
 	now := time.Now()
 	for i, c := range cs {
 		r, ok := restingOf(c)
-		if !ok || c.p.Account != nil || r.Why != failQuota && r.Why != failCredit || !quotaStatus(r.Status) || r.said == "" {
+		if !ok || c.p.Account != nil || r.there || r.Why != failQuota && r.Why != failCredit || !quotaStatus(r.Status) || r.said == "" {
 			return Rest{}, time.Time{}, false
 		}
 		at := r.asksAt(now)

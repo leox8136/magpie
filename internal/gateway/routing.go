@@ -581,6 +581,14 @@ type Rest struct {
 	// held every request for 15 minutes or more
 	first bool
 	askAt time.Time
+	// there: another computer's magpie refused one of its models
+	// (remoteModelRest). It routes that model there and holds its own
+	// rests, and what it serves under a name can change at any moment (a
+	// group moved to another vendor), so its refusal out of quota or
+	// credit is never given again here without asking it (quotaHeld):
+	// asked, it answers from its own hold at once, or from what it serves
+	// now
+	there bool
 }
 
 // asksAt is when r, a key's rest out of its allowance or credit, has it
@@ -1275,7 +1283,7 @@ func (s *Server) restAfterMarked(c candidate, status int, header http.Header, bo
 		id = c.restID()
 	}
 	if remoteModelRest(c, why, header) {
-		id = c.restID()
+		id, r.there = c.restID(), true
 	}
 	r.Key = id
 	if id == c.restID() {
