@@ -162,6 +162,18 @@ listed models keep their `Available` names unchanged
 
 ## Constraints and failure behavior
 
+Codex reset expiry details distinguish a failed read (`ResetCredits.untilUnread`)
+from a successful response whose cards never expire. Background expiry checks
+keep the last known expiry after failure and retry soon; they do not forget the
+card for the six-hour no-expiry interval (`expiringResets.check`). Only the
+background `SpendExpiringCodexResets` context allows up to 30 seconds for the
+details request. Ordinary callers retain the four-second bound; a parent
+cancellation or earlier deadline still wins. Counts and the existing `Each`
+card list keep their wire format. This changes neither reset eligibility nor
+the spending policy selected by the user. `TestExpiringResetSpentPastAFailedRead`
+and `TestCodexResetsUntilUnread` cover failure, repair and the timeout distinction.
+
+
 An allowance deliberately not requested (a saved Claude account outside
 its card refresh, or allowances set to *When I ask*) can use the last
 reading with `readDeferred: true`. `AsOf` and `ReadAt` still date that

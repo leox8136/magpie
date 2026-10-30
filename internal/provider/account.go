@@ -231,6 +231,12 @@ func (p Provider) Sign(ctx context.Context, req *http.Request, proto Protocol, b
 		}
 		catalog.PutUserHeader(req.Header, k, v)
 	}
+	// a remote magpie is always sent its key as x-api-key, which no header
+	// of the user's replaces: their Authorization (a proxy's) goes on
+	// without taking the key away (remoteKey)
+	if p.IsRemoteMagpie() && p.Key != "" {
+		remoteKey(req.Header, p.Key)
+	}
 	return nil
 }
 
