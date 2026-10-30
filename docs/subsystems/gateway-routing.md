@@ -1240,3 +1240,14 @@ requested field's value when both names exist. Provider probes use the same
 alternate-field rule (`tinyBody`, `probe` in
 [`test.go`](../../internal/provider/test.go)). Tests: `TestChatTokenFieldRetriedWhenNamed`,
 `TestChatTokenFieldIsolationAndRetryBound`, `TestWithTokenFieldBothPreservesPayload`.
+
+Every thinking block sent to a Messages client has a string `signature`.
+Translated streams start with an empty one; `sigFieldTidy` in
+[`thinking_signature.go`](../../internal/gateway/thinking_signature.go) fills
+missing/null fields in relayed whole replies and stream block starts.
+Signed blocks and `redacted_thinking` stay unchanged. Only changed blocks of
+whole replies are re-encoded; unrelated large text/tool payloads keep their
+bytes. An empty string supplies no real signature; existing history replay
+rules still decide whether unsigned thinking can go to a provider.
+`TestMessagesThinkingIsSigned`, `TestSignedThinkingRelayedAsItCame`,
+`TestSigFieldTidyCutAnywhere`.
