@@ -4187,6 +4187,9 @@ func (s *Server) forward(ctx context.Context, p provider.Provider, to provider.P
 	if err == nil && mantleRoutes(p, to) {
 		res, err = s.mantleReroute(ctx, p, to, path, body, in, res)
 	}
+	if err == nil {
+		res, err = s.retryTokenField(ctx, p, to, path, body, in, res)
+	}
 	if err == nil && (res.StatusCode == http.StatusForbidden || res.StatusCode == http.StatusBadRequest) && p.Retries() {
 		// an account that can mend what the refusal names (a Factory org
 		// the server won't take; a model Copilot's Auto picked that the
@@ -4299,6 +4302,8 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 		}
 		body = extra
 	}
+	// Normalize after extraBody too: it can supply or force a token limit.
+	body = s.chatTokenField(p, to, body)
 	if !countsTokens(path) {
 		// the tier it goes at, the user's own fields in it (#1784)
 		noteWireTier(ctx, to, body)

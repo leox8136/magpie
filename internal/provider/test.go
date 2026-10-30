@@ -189,7 +189,7 @@ func (p Provider) mantleBase(base, model string) string {
 func tinyBody(q Provider, proto Protocol, model string) (url, body string) {
 	switch proto {
 	case Chat:
-		if q.IsBedrock() || q.IsAzure() {
+		if q.IsBedrock() || q.IsAzure() || OpenAIHost(HostOf(q.Base(Chat))) {
 			return q.mantleBase(q.Chat, model) + "/chat/completions", fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}],"max_completion_tokens":16}`, model)
 		}
 		return q.Chat + "/chat/completions", fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}],"max_tokens":16}`, model)
@@ -547,7 +547,21 @@ func (p Provider) ownRequests(ctx context.Context, kind string) context.Context 
 // it: the vendor's error, a stream's error after its 200 too. Do would
 // write the status alone, so a failed test's row said nothing of why
 // (ysm119 on Discord: "no answer", and no error to find anywhere).
-func probe(ctx context.Context, p Provider, proto Protocol, url string, body []byte, model string, wait time.Duration) (r Result) {
+func probe(ctx context.Context, p Provider, proto Protocol, url string, body []byte, model string, wait time.Duration) Result {
+	r := probeOnce(ctx, p, proto, url, body, model, wait)
+	if proto == Chat && r.Status == http.StatusBadRequest {
+		// a vendor whose 400 names the other reply-length field as the
+		// one to send (a relay in front of OpenAI's reasoning models, or
+		// one that reads max_tokens alone) is asked once more with it, as
+		// the gateway asks it (forward)
+		if b, ok := WithTokenField(body, TokenFieldWanted([]byte(r.Error))); ok {
+			return probeOnce(ctx, p, proto, url, b, model, wait)
+		}
+	}
+	return r
+}
+
+func probeOnce(ctx context.Context, p Provider, proto Protocol, url string, body []byte, model string, wait time.Duration) (r Result) {
 	r = Result{Protocol: proto, Model: model}
 	if model == "" {
 		r.Error = "no model to try: expose one, or refresh the model list"

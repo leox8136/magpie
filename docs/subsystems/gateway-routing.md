@@ -1224,3 +1224,19 @@ refusal without asking the remote. Its routing group may have changed there.
 A remote gateway-key limit still holds the key locally; verification holds
 keep their existing behavior. `TestRemoteMagpieQuotaIsAskedNotReplayed`,
 `TestHandAddedMagpieQuotaIsAskedNotReplayed`, `TestRemoteMagpieKeyLimitRestsTheKey`.
+
+Chat reply limits use `max_completion_tokens` on OpenAI's own API
+(`provider.OpenAIHost`), with existing Azure, Bedrock and DeepSeek rules
+preserved. Other endpoints initially get the client's field. An explicit
+400/422 asking for the alternate name gets at most one compatibility retry
+(`chatTokenField`, `retryTokenField` in
+[`token_field.go`](../../internal/gateway/token_field.go)); value-limit errors
+are not retried for this. Learning is scoped to provider, endpoint,
+credential/account and wire model, so a mixed-model relay or changed key does
+not inherit another backend's requirement. Normalization runs after the provider's ExtraBody merge as well, so limits
+added or forced there participate in compatibility and learned retries.
+`provider.WithTokenField` returns an owned copy only when changed, preserves unrelated bytes, and keeps the
+requested field's value when both names exist. Provider probes use the same
+alternate-field rule (`tinyBody`, `probe` in
+[`test.go`](../../internal/provider/test.go)). Tests: `TestChatTokenFieldRetriedWhenNamed`,
+`TestChatTokenFieldIsolationAndRetryBound`, `TestWithTokenFieldBothPreservesPayload`.
