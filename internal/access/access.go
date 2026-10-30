@@ -90,7 +90,8 @@ type Key struct {
 	// key has them only beside a Limit, which an older magpie still reads.
 	More []Limit `json:"moreLimits,omitempty"`
 	// Models are the models the key may use (#882): "<provider>/<model>",
-	// "<provider>/*" or a group's "group/<name>"; none for every model.
+	// "<provider>/*" or a group's "group/<name>"; none for every model,
+	// unless it lists accounts: then its accounts' providers' (HeldModels).
 	Models []string `json:"models,omitempty"`
 	// Accounts are the accounts and keys the key may use (#905), as
 	// "<provider>/<account>": a signed-in account by its stable id, a
@@ -499,7 +500,7 @@ func keyIdentity(k Key) Identity {
 		v := *k.Concurrency
 		concurrency = &v
 	}
-	return Identity{KeyID: k.ID, KeyName: k.Name, Concurrency: concurrency, Limit: limit, More: slices.Clone(k.More), Models: slices.Clone(k.Models), Accounts: slices.Clone(k.Accounts), Quotas: k.Quotas}
+	return Identity{KeyID: k.ID, KeyName: k.Name, Concurrency: concurrency, Limit: limit, More: slices.Clone(k.More), Models: slices.Clone(HeldModels(k.Models, k.Accounts)), Accounts: slices.Clone(k.Accounts), Quotas: k.Quotas}
 }
 
 func legacyLANKey(secret string) Key {

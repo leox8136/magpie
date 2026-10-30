@@ -402,7 +402,11 @@ failed writes and external edits cannot publish unverified permissions. Systems
 without a change-time stamp verify the file's bytes instead. Key management
 continues to serialize atomic replacements with its file lock; request
 lookups do not take that writer lock. Each returned identity owns its
-restriction slices, limit value and caller concurrency policy.
+restriction slices, limit value and caller concurrency policy. Account-only
+model restrictions are derived in `access.keyIdentity`, covering prepared and
+reused authentication snapshots; inferred model patterns are not persisted as
+explicit picks. `TestAccountsOnlyAuthenticationKeepsOwnedCurrentPolicy` checks
+permission updates, ownership and preservation of budget/concurrency policy.
 
 Budget reservations, window initialization and settlement use a lock per
 key and usage-log path (`budget.stateFor`). A slow settlement for one key

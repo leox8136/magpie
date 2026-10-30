@@ -302,9 +302,13 @@ function gatewayModelsBadge(k) {
   b.textContent = !ms.length && !as.length ? t("All models")
     : ms.length ? (ms.length === 1 && !as.length ? ms[0] : t("{n} models", { n: ms.length }))
       : (as.length === 1 ? accountShown(as[0]) : t("{n} accounts", { n: as.length }));
+  // an account picked and no model holds the key to the accounts'
+  // providers' models (access.HeldModels, Linka on Discord): it is not
+  // let off to every other provider's
   b.title = (ms.length ? t("Only these models: {list}", { list: ms.join(", ") }) : t("Pick the models this key may use"))
     + (as.length ? "\n" + t("Only these accounts: {list}", { list: as.map(accountShown).join(", ") })
-      + "\n" + t("A provider with no account picked is used on every account; to keep the key off it, pick only other providers' models") : "");
+      + "\n" + (ms.length ? t("A provider with no account picked is used on every account; to keep the key off it, pick only other providers' models")
+        : t("No model is picked, so this key may use only the picked accounts' providers' models")) : "");
   b.setAttribute("aria-label", t("Models this key may use"));
   b.setAttribute("aria-haspopup", "menu");
   b.setAttribute("aria-expanded", "false");
@@ -322,10 +326,20 @@ function gatewayModelsBadge(k) {
     // every one, and its unticked accounts say so (#2077: unticking all of
     // Codex's left Codex's models served)
     const named = new Set(as.map((v) => v.split("/")[0].toLowerCase()));
+    // a provider the key's models leave out is used on none of its
+    // accounts: with no model picked, every provider no account is
+    // picked of (access.HeldModels)
+    const modelsReach = (pid) => ms.some((m) => {
+      const head = m.split("/")[0].toLowerCase();
+      return head === pid || head.includes("*");
+    });
     for (const a of accounts || []) {
       accountsSet.add(a.id);
-      const note = as.length && !named.has(String(a.provider).toLowerCase())
-        ? t("Used: no {provider} account is picked", { provider: a.providerName })
+      const pid = String(a.provider).toLowerCase();
+      const note = as.length && !named.has(pid)
+        ? (ms.length && modelsReach(pid)
+          ? t("Used: no {provider} account is picked", { provider: a.providerName })
+          : t("Not used: no {provider} model or account is picked", { provider: a.providerName }))
         : a.plan ? a.providerName + " · " + a.plan : a.providerName;
       const o = { v: a.id, name: a.name, note, literalName: true };
       ofProvider.set(a.provider, [...(ofProvider.get(a.provider) || []), o]);
@@ -375,7 +389,10 @@ function gatewayModelsBadge(k) {
         const pickedModels = picked.filter((v) => !accountsSet.has(v));
         const pickedAccounts = picked.filter((v) => accountsSet.has(v));
         const out = await gatewayKeyAction("models-key", { key: k.id, models: pickedModels });
-        if (out) status(t(pickedModels.length ? "{name} may use only the models picked" : "{name} may use every model", { name: k.name }), "ok");
+        if (out) {
+          status(t(pickedModels.length ? "{name} may use only the models picked"
+            : pickedAccounts.length ? "{name} may use only the picked accounts' models" : "{name} may use every model", { name: k.name }), "ok");
+        }
         if (pickedAccounts.length !== as.length || pickedAccounts.some((v) => !as.includes(v))) {
           await gatewayKeyAction("accounts-key", { key: k.id, accounts: pickedAccounts });
         }
