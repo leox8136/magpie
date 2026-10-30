@@ -1251,3 +1251,16 @@ bytes. An empty string supplies no real signature; existing history replay
 rules still decide whether unsigned thinking can go to a provider.
 `TestMessagesThinkingIsSigned`, `TestSignedThinkingRelayedAsItCame`,
 `TestSigFieldTidyCutAnywhere`.
+
+## Spent final members and shared decision deadlines
+
+When an ordered group's earlier member fails transiently and its final member
+has just exhausted quota or credit, the existing patience budget can replan
+those earlier members (`lastSpent` in [`gateway.go`](../../internal/gateway/gateway.go)).
+The exhausted account rests for subsequent requests. A final member already
+resting out of allowance does not start another replan cycle; a prompt refusal
+such as Antigravity's 429 never becomes an account quota rest. Strict affinity,
+request cancellation, Retry-After and existing patience limits still bound
+retrying. This complements restoring a provider's primary on a new user turn.
+Tests: `TestGroupRelayBlipDoesNotEndOnSpentLast`, `TestGroupSpentLastAccountRests`,
+`TestCodexSpentGrokFailingIsTold`, `TestAntigravityTurnedAwayLastIsNoQuota`.
