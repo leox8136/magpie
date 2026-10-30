@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tidwall/gjson"
 	"github.com/yetone/magpie/internal/provider"
 )
 
@@ -184,10 +185,7 @@ func TestSigFieldTidyWholePreservesOtherBlocks(t *testing.T) {
 	signed := `{"type":"thinking", "thinking":"signed", "signature":"real"}`
 	body := []byte(`{"content":[{"type":"thinking","thinking":"one"},` + tool + `,` + signed + `,{"type":"thinking","thinking":"two","signature":null}]}`)
 	tidy := &sigFieldTidy{}
-	if out := tidy.write(body); len(out) != 0 {
-		t.Fatal("partial JSON emitted")
-	}
-	out := tidy.flush()
+	out := append(tidy.write(body), tidy.flush()...)
 	if !json.Valid(out) || !bytes.Contains(out, []byte(tool)) || !bytes.Contains(out, []byte(signed)) {
 		t.Fatalf("unrelated payload changed: %s", out)
 	}
@@ -203,4 +201,137 @@ func TestSigFieldTidyWholePreservesOtherBlocks(t *testing.T) {
 	if len(stream.write(tail)) != 0 || !bytes.Equal(stream.flush(), tail) {
 		t.Fatal("partial tail lost")
 	}
+}
+
+func TestWholeSignaturesChunks(t *testing.T) {
+	cases := []string{
+		minimaxUnsignedWhole,
+		`{"meta":{"content":[{"type":"thinking"}]},"content":[{"thinking":"escaped \\\" } , text","signature":null,"type":"thinking"},{"type":"tool_use","input":{"type":"thinking","content":[1,2],"n":9007199254740993}},{"signature":"real","type":"thinking","thinking":"signed"}]}`,
+		`{"cont\u0065nt":[{"type":"thinking","thinking":"x"},{"type":"text","text":"y"}],"usage":{"output_tokens":4}}`,
+	}
+	for _, body := range cases {
+		want := []byte(body)
+		if fixed, ok := signedContent(want); ok {
+			want = fixed
+		}
+		for _, chunk := range []int{1, 7, 32768} {
+			tidy := &sigFieldTidy{}
+			var got []byte
+			for i := 0; i < len(body); i += chunk {
+				got = append(got, tidy.write([]byte(body[i:min(i+chunk, len(body))]))...)
+			}
+			got = append(got, tidy.flush()...)
+			var a, b any
+			if json.Unmarshal(got, &a) != nil || json.Unmarshal(want, &b) != nil {
+				t.Fatalf("invalid JSON: %s", got)
+			}
+			aa, _ := json.Marshal(a)
+			bb, _ := json.Marshal(b)
+			if !bytes.Equal(aa, bb) {
+				t.Fatalf("chunk %d: %s != %s", chunk, got, want)
+			}
+		}
+	}
+}
+
+func TestWholeSignaturesReleasesLargeText(t *testing.T) {
+	tidy := &sigFieldTidy{}
+	prefix := []byte(`{"content":[{"type":"text","text":"`)
+	if got := tidy.write(prefix); !bytes.Equal(got, prefix) {
+		t.Fatalf("text withheld: %s", got)
+	}
+	chunk := bytes.Repeat([]byte("x"), 32<<10)
+	for i := 0; i < 512; i++ {
+		if got := tidy.write(chunk); !bytes.Equal(got, chunk) {
+			t.Fatal("large text withheld")
+		}
+		if cap(tidy.whole.block) > 1024 {
+			t.Fatal("large text retained")
+		}
+	}
+	tail := []byte(`"},{"type":"thinking","thinking":"unfinished`)
+	got := append(tidy.write(tail), tidy.flush()...)
+	if !bytes.Equal(got, tail) {
+		t.Fatalf("truncated block changed: %s", got)
+	}
+}
+
+func BenchmarkWholeSignatureResponse(b *testing.B) {
+	for _, kind := range []string{"text", "tool", "thinking"} {
+		payload := strings.Repeat("x", 16<<20)
+		block := `{"type":"text","text":"` + payload + `"}`
+		if kind == "tool" {
+			block = `{"type":"tool_use","input":{"payload":"` + payload + `"}}`
+		}
+		if kind == "thinking" {
+			block = `{"type":"thinking","thinking":"` + payload + `"}`
+		}
+		body := []byte(`{"content":[` + block + `],"usage":{"output_tokens":1}}`)
+		for _, old := range []bool{true, false} {
+			name := kind + "/incremental"
+			if old {
+				name = kind + "/whole-buffer"
+			}
+			b.Run(name, func(b *testing.B) {
+				b.SetBytes(int64(len(body)))
+				b.ReportAllocs()
+				for n := 0; n < b.N; n++ {
+					var buf []byte
+					tidy := &sigFieldTidy{}
+					for i := 0; i < len(body); i += 32 << 10 {
+						chunk := body[i:min(i+32<<10, len(body))]
+						if old {
+							buf = append(buf, chunk...)
+						} else {
+							tidy.write(chunk)
+						}
+					}
+					if old {
+						signedContent(buf)
+					} else {
+						tidy.flush()
+					}
+				}
+			})
+		}
+	}
+}
+
+// Pre-change whole-body implementation, retained only as the benchmark and
+// semantic reference for the incremental implementation.
+// signedContent is a whole Messages reply whose thinking blocks without a
+// signature are given an empty one, and whether it had such a block.
+func signedContent(b []byte) ([]byte, bool) {
+	if !bytes.Contains(b, thinkingType) {
+		return nil, false
+	}
+	content := gjson.GetBytes(b, "content")
+	if !content.IsArray() {
+		return nil, false
+	}
+	// Splice only changed blocks. Re-encoding the entire reply would copy
+	// large text/tool payloads repeatedly and alter unrelated wire bytes.
+	var out []byte
+	last := 0
+	content.ForEach(func(_, block gjson.Result) bool {
+		if block.Get("type").Str != "thinking" || block.Get("signature").Type == gjson.String {
+			return true
+		}
+		raw := b[block.Index : block.Index+len(block.Raw)]
+		fixed, ok := unsignedThinking(raw)
+		if !ok {
+			return true
+		}
+		if out == nil {
+			out = make([]byte, 0, len(b)+len(fixed)-len(raw))
+		}
+		out = append(out, b[last:block.Index]...)
+		out = append(out, fixed...)
+		last = block.Index + len(block.Raw)
+		return true
+	})
+	if out == nil {
+		return nil, false
+	}
+	return append(out, b[last:]...), true
 }

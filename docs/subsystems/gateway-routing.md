@@ -1247,7 +1247,19 @@ Translated streams start with an empty one; `sigFieldTidy` in
 missing/null fields in relayed whole replies and stream block starts.
 Signed blocks and `redacted_thinking` stay unchanged. Only changed blocks of
 whole replies are re-encoded; unrelated large text/tool payloads keep their
-bytes. An empty string supplies no real signature; existing history replay
+bytes. Non-streaming repair uses `wholeSignatures` in
+[`thinking_whole.go`](../../internal/gateway/thinking_whole.go): it releases
+ordinary text/tool blocks once their type is known and signed thinking once
+its signature is known, retaining only an undecided or unsigned thinking
+block. Field order, escaped strings and nested tool data are preserved;
+truncated blocks are forwarded incomplete, never invented or completed.
+This removes the signature filter's whole-response copy, not the gateway's
+existing whole-reply holding or other response filters. One huge unsigned
+thinking block (or a block whose type appears last) can still use memory
+proportional to that block. `TestWholeSignaturesChunks`,
+`TestWholeSignaturesReleasesLargeText`, `BenchmarkWholeSignatureResponse`
+and `BenchmarkWholeMessageHTTP` cover correctness and large-response costs.
+An empty string supplies no real signature; existing history replay
 rules still decide whether unsigned thinking can go to a provider.
 `TestMessagesThinkingIsSigned`, `TestSignedThinkingRelayedAsItCame`,
 `TestSigFieldTidyCutAnywhere`.

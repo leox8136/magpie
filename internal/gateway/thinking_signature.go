@@ -3,8 +3,6 @@ package gateway
 import (
 	"bytes"
 	"encoding/json"
-
-	"github.com/tidwall/gjson"
 )
 
 // A Messages thinking block always says its signature. Anthropic's own API
@@ -32,18 +30,19 @@ var thinkingType = []byte(`"thinking"`)
 // sigFieldTidy gives each thinking block of a Messages reply relayed as it
 // came an empty signature where it has none: a stream's content_block_start
 // lines, or a whole reply's content. A line that names no thinking, or that
-// has a signature already (Anthropic's), passes as it came; a reply that
-// isn't a stream is held whole and gone through at the end.
+// has a signature already (Anthropic's), passes as it came; a whole reply
+// is processed block by block (wholeSignatures).
 type sigFieldTidy struct {
-	sse bool
-	buf []byte
+	sse   bool
+	buf   []byte
+	whole wholeSignatures
 }
 
 func (t *sigFieldTidy) write(b []byte) []byte {
-	t.buf = append(t.buf, b...)
 	if !t.sse {
-		return nil
+		return t.whole.write(b)
 	}
+	t.buf = append(t.buf, b...)
 	i := bytes.LastIndexByte(t.buf, '\n')
 	if i < 0 {
 		return nil
@@ -54,14 +53,11 @@ func (t *sigFieldTidy) write(b []byte) []byte {
 }
 
 func (t *sigFieldTidy) flush() []byte {
+	if !t.sse {
+		return t.whole.flush()
+	}
 	b := t.buf
 	t.buf = nil
-	if !t.sse {
-		if out, ok := signedContent(b); ok {
-			return out
-		}
-		return b
-	}
 	return t.lines(b)
 }
 
@@ -111,43 +107,6 @@ func signedStart(data []byte) ([]byte, bool) {
 	ev["content_block"] = block
 	nb, err := marshalPlain(ev)
 	return nb, err == nil
-}
-
-// signedContent is a whole Messages reply whose thinking blocks without a
-// signature are given an empty one, and whether it had such a block.
-func signedContent(b []byte) ([]byte, bool) {
-	if !bytes.Contains(b, thinkingType) {
-		return nil, false
-	}
-	content := gjson.GetBytes(b, "content")
-	if !content.IsArray() {
-		return nil, false
-	}
-	// Splice only changed blocks. Re-encoding the entire reply would copy
-	// large text/tool payloads repeatedly and alter unrelated wire bytes.
-	var out []byte
-	last := 0
-	content.ForEach(func(_, block gjson.Result) bool {
-		if block.Get("type").Str != "thinking" || block.Get("signature").Type == gjson.String {
-			return true
-		}
-		raw := b[block.Index : block.Index+len(block.Raw)]
-		fixed, ok := unsignedThinking(raw)
-		if !ok {
-			return true
-		}
-		if out == nil {
-			out = make([]byte, 0, len(b)+len(fixed)-len(raw))
-		}
-		out = append(out, b[last:block.Index]...)
-		out = append(out, fixed...)
-		last = block.Index + len(block.Raw)
-		return true
-	})
-	if out == nil {
-		return nil, false
-	}
-	return append(out, b[last:]...), true
 }
 
 // unsignedThinking is a thinking block that has no signature, given an
