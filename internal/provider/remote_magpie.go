@@ -116,6 +116,11 @@ func (p Provider) listHeaders() map[string]string {
 	if h == nil {
 		h = map[string]string{}
 	}
+	for k := range h {
+		if strings.EqualFold(k, "x-api-key") {
+			delete(h, k)
+		}
+	}
 	h[DrawersHeader] = "1"
 	h[VideomakersHeader] = "1"
 	h[PricesHeader] = "1"

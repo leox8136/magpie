@@ -66,6 +66,17 @@ keys and accounts per request is in [Gateway routing and fallback](gateway-routi
 
 ## Remote magpie
 
+Every request to a Remote Magpie carries its configured literal `Headers`,
+including model lists, API requests, quota cards/history/refresh and each key's
+limit read (`signRemote`, `remoteJSON`, `askRemoteKeyLimit`). Its gateway
+credential is always sent as `x-api-key`; configured `Authorization` may carry
+a front proxy's credentials without replacing the gateway identity. A configured
+`x-api-key`, in any letter case, cannot override the selected gateway key.
+Model-list filtering clones the header map; provider configuration is preserved.
+`TestRemoteMagpieRequestsCarryHeaders` covers all these entries and two separate
+keys' limits. Header values retain this branch's literal semantics.
+
+
 The `remote-magpie` preset is of its own kind, `KindRemote` (`remote`), not
 a relay: the app's Add sheet lists it under Another computer's magpie, after
 On this machine, and `magpie presets` and the TUI's add list name it so too

@@ -236,6 +236,8 @@ func TestLANModelsWithKeyBesideAnotherToken(t *testing.T) {
 		{"x-api-key", key, "Authorization", "Bearer"},
 		{"x-api-key", key, "Authorization", "Bearer undefined"},
 		{"x-api-key", key, "Authorization", "Bearer magpie"},
+		// A Remote Magpie can carry a proxy's Basic auth beside its gateway key.
+		{"x-api-key", key, "Authorization", "Basic cHJveHk6cHc="},
 		{"Authorization", "bearer " + key},
 		{"Authorization", "Bearer magpie", "x-goog-api-key", key},
 	} {
