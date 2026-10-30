@@ -489,6 +489,20 @@ and includes caller queues in `waiting`. Tests: `TestCallerConcurrency*`,
 `TestCallerQueueCancellationTimeoutAndReservation`,
 `TestCallerConcurrencyHoldsStreamUntilEnd` and `TestGatewayCallerConcurrencyCLI`.
 
+Protocol conversion also bounds how much serialized conversation is held
+beside its output (`marshalBody` in `fastjson.go`). Chat, Responses and
+Anthropic builders give it only their own conversation lists to spend: each
+encoded item is released as it is copied. Above 4 MiB of retained encoded
+items, later items are measured and then encoded directly into the final
+buffer. This reduces retained copies at the cost of extra encoding for large
+bodies; small bodies retain the single-encoding path. Gemini spends no list.
+The decoded request buffer remains available to retries and failover; spending
+a builder's list does not mutate it. JSON output and refusal of unsupported
+values retain `json.Marshal` semantics. `TestMarshalBody*` checks byte equality,
+errors and allocation bounds; `BenchmarkTranslatedRequest` compares actual
+HTTP Responses-to-Chat forwarding with budget pre-read and caller admission,
+including sampled heap peaks (both HTTP peers, not RSS).
+
 The budget pre-read and the route share one decoded request buffer
 (`decodedRequestBody`, `readBoundedRequestBody`). Later reads still enforce
 their own size limit; replacing `r.Body` discards the cached buffer. The
