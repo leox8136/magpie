@@ -1,4 +1,6 @@
-FROM golang:1.26-alpine AS build
+# Pin multi-platform indexes; refresh digests deliberately for security updates
+# and verify both linux/amd64 and linux/arm64 when updating.
+FROM golang:1.26.10-alpine3.24@sha256:a2012b4a1d1f9f7e9f44e0d39b805a901e856b1dd80b4e6ee4338db547050308 AS build
 
 WORKDIR /src
 
@@ -20,7 +22,7 @@ RUN CGO_ENABLED=0 go build -tags nogui -trimpath \
 # Debian 12 has the glibc, libgcc and libstdc++ the plugins' Bun needs too,
 # and bash for a NAS panel's terminal. nonroot keeps distroless's uid 65532,
 # so a volume made by an older image stays writable.
-FROM debian:12-slim
+FROM debian:12-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
