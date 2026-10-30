@@ -2591,7 +2591,7 @@ function routingPage(part) {
     bodiesGot.set(id, pending);
     let got;
     try {
-      const res = await fetch("/api/gateway/call?route=" + encodeURIComponent(id), { cache: "no-store" });
+      const res = await fetch(magpiePath("/api/gateway/call?route=" + encodeURIComponent(id)), { cache: "no-store" });
       if (res.status === 404) got = { gone: true };
       else if (!res.ok) got = { error: (await res.json().catch(() => null))?.error || res.statusText || String(res.status) };
       else got = await res.json();
@@ -2861,7 +2861,7 @@ function routingPage(part) {
   window.openRoute = async (id, time, o = {}) => {
     let r = routes.get(id);
     if (!r) {
-      const res = await fetch("/api/gateway/route?id=" + encodeURIComponent(id) + "&day=" + encodeURIComponent(time.slice(0, 10)));
+      const res = await fetch(magpiePath("/api/gateway/route?id=" + encodeURIComponent(id) + "&day=" + encodeURIComponent(time.slice(0, 10))));
       if (res.status === 404) throw new Error(t("Routing history for this request is no longer available."));
       if (!res.ok) throw new Error(await res.text());
       r = whole(await res.json());
@@ -3083,7 +3083,7 @@ function routingPage(part) {
   };
   async function loadDays(d) {
     try {
-      const res = await (await fetch("/api/gateway/history?day=" + encodeURIComponent(d || ""))).json();
+      const res = await (await fetch(magpiePath("/api/gateway/history?day=" + encodeURIComponent(d || "")))).json();
       days = res.days || [];
       noteAccounts(res.routes);
       if (d && d === day) { past = (res.routes || []).map(whole); pastCut = !!res.cut; }
@@ -3144,7 +3144,7 @@ function routingPage(part) {
     const keys = [...new Set(listed().map(ownKey).filter(Boolean))].slice(0, 2000);
     if (!keys.length) return false;
     for (const k of keys) askedTitles.add(k);
-    const res = await fetch("/api/gateway/session-titles", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: [], routeIds: [], sessions: keys }) });
+    const res = await fetch(magpiePath("/api/gateway/session-titles"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: [], routeIds: [], sessions: keys }) });
     if (!res.ok) return false;
     const titles = (await res.json()).titles || {};
     let changed = false;
@@ -3170,7 +3170,7 @@ function routingPage(part) {
       // the API's 2,000-row limit. Only Codex rows need names or associations.
       for (let i = 0; i < rs.length; i += 2000) {
         const batch = rs.slice(i, i + 2000), ids = [...new Set(batch.map(groupSession).filter(Boolean))];
-        const res = await fetch("/api/gateway/session-titles", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids, groups: true, routeIds: batch.map((r) => r.id), day: sourceDay }) });
+        const res = await fetch(magpiePath("/api/gateway/session-titles"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids, groups: true, routeIds: batch.map((r) => r.id), day: sourceDay }) });
         if (!res.ok) return;
         const part = await res.json();
         if (day !== sourceDay) return;
@@ -4457,7 +4457,7 @@ function routingPage(part) {
         caught = true;
       }
       try {
-        const res = await fetch(`/api/gateway/trace?after=${seq}${loaded ? "&wait=1" : ""}`);
+        const res = await fetch(magpiePath(`/api/gateway/trace?after=${seq}${loaded ? "&wait=1" : ""}`));
         const d = await res.json();
         heard = true;
         noteAccounts(d);

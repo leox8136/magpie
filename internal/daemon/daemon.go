@@ -160,6 +160,28 @@ func Web() (addr, key string) {
 	return webOf(string(b))
 }
 
+// WebBasePath is the installed service's mount, not the invoking shell's.
+func WebBasePath() string {
+	m, err := current()
+	if err != nil {
+		return ""
+	}
+	b, err := os.ReadFile(m.file())
+	if err != nil {
+		return ""
+	}
+	return webBasePathOf(string(b))
+}
+
+func webBasePathOf(text string) string {
+	for _, pattern := range []string{`Environment="MAGPIE_BASE_PATH=([^"\n]*)"`, `<key>MAGPIE_BASE_PATH</key><string>([^<]*)</string>`} {
+		if m := regexp.MustCompile(pattern).FindStringSubmatch(text); m != nil {
+			return strings.TrimSuffix(strings.TrimSpace(html.UnescapeString(m[1])), "/")
+		}
+	}
+	return ""
+}
+
 var (
 	webArgRe = regexp.MustCompile(`(?:"|<string>)` + regexp.QuoteMeta(webFlag) + `([^"<\s]+)(?:"|</string>)`)
 	// a unit's Environment="MAGPIE_WEB_KEY=…", a plist's
@@ -366,7 +388,7 @@ var carried = []string{
 	"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
 	"http_proxy", "https_proxy", "all_proxy", "no_proxy",
 	"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME",
-	"MAGPIE_ADDR", "MAGPIE_TRUST_PROXY", "MAGPIE_BUN", "MAGPIE_WEB_URL",
+	"MAGPIE_ADDR", "MAGPIE_BASE_PATH", "MAGPIE_PUBLIC_URL", "MAGPIE_TRUST_PROXY", "MAGPIE_BUN", "MAGPIE_WEB_URL",
 	// `magpie daemon install --tls-cert … --tls-key …` sets them
 	"MAGPIE_TLS_CERT", "MAGPIE_TLS_KEY",
 }

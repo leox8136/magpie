@@ -700,3 +700,35 @@ still follows the existing Not set up folding rules. The dialog explains that
 restoring visibility does not pin an unconfigured agent into the main list.
 See `agent-bulk-visibility.test.cjs` for persistence, partial selection, failed
 saves, narrow layouts and all five languages in Chromium and WebKit.
+
+### Explicit HTTP mount
+
+`MAGPIE_BASE_PATH` mounts the browser service under a clean absolute path
+(e.g. `/magpie`). [`gateway/base_path.go`](../../internal/gateway/base_path.go)
+validates it at startup and strips it before `onePort`, the allow list,
+web authentication and API routing. The browser listener returns 404 outside
+the mount. Host, peer, headers, escaped route, query and request body keep
+their existing meaning; forwarding headers never select the mount.
+`RequestBasePath` carries it in request context. `webGuard` scopes the cookie,
+login form and redirect to it; `boot.js` advertises it to `paths.js`'s
+`magpiePath`, used by local fetches, downloads, icons and plugin frames.
+Relative assets and the PWA manifest stay relative. Plugin page/panel JSON
+and CSP sources include the mount; the sandbox and opaque-origin API guard
+still apply. Already-mounted URLs are left unchanged by the client helper.
+
+The gateway's `Front` also accepts the mount while retaining its original
+routes for local agent configs. Forwarding to another gateway process restores
+the prefix in its URL; configure the same prefix on both processes. All aliases keep the existing gateway key,
+sharing, origin and page-port checks; a page cookie is never a gateway key.
+A public URL with no path gets the mount appended, and a different public
+path is rejected. Services retain the mount/public URL in their environment;
+CLI links to an installed service read that service's mount.
+See `base_path_test.go` in gui/gateway, the CLI/daemon link tests and the
+configured-mount case in `tests/plugin-page.test.cjs` (Chromium/WebKit).
+Deployment instructions are in [Connecting anything else](../reference.md#connecting-anything-else).
+
+Mounts under existing gateway route namespaces, `/api` or `/_magpie` are
+rejected rather than ambiguously interpreted as already-mounted URLs.
+The desktop app publishes its mount in `web-page.json` when applying its
+listener configuration; `magpie web` reads that value when opening the
+app's existing page, independently of the calling shell's environment.

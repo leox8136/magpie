@@ -15,7 +15,16 @@ import (
 func (s *Server) Front() http.Handler {
 	// the goroutine dump ahead of lanGuard too, whose allow list reads
 	// settings.json under its lock (dumpFirst)
-	s.frontOnce.Do(func() { s.front = s.dumpFirst(lanGuard(s.Handler())) })
+	s.frontOnce.Do(func() {
+		prefix, err := BasePath()
+		if err != nil {
+			s.front = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			})
+			return
+		}
+		s.front = MountBasePath(prefix, s.dumpFirst(lanGuard(s.Handler())), true)
+	})
 	return s.front
 }
 

@@ -54,7 +54,7 @@ func webCmd(args []string) error {
 	// the service serves the page already: its own, beside the gateway
 	// it serves, is the one to open
 	if a, k := daemon.Web(); a != "" && gateway.ServedBy().Running {
-		link := webLink(a, k)
+		link := webLinkAt(a, k, daemon.WebBasePath())
 		fmt.Println(green.Render("●"), "the magpie service serves this page:", bold.Render(link))
 		fmt.Println(muted.Render("  magpie daemon web off turns it off"))
 		if open {
@@ -65,7 +65,7 @@ func webCmd(args []string) error {
 	// the app serves this page on this port already (Settings › Network
 	// and sharing › Browser access): its own is the one to open
 	if a, k := gui.AppPage(); a != "" && samePort(a, addr) && answers(a) {
-		link := webLink(a, k)
+		link := webLinkAt(a, k, gui.AppPageBasePath())
 		fmt.Println(green.Render("●"), "the magpie app serves this page:", bold.Render(link))
 		fmt.Println(muted.Render("  Settings › Network and sharing › Browser access turns it off"))
 		if open {
@@ -160,9 +160,14 @@ func lanWarning() string {
 // webLink is the link to a page served on addr with key, from this
 // computer.
 func webLink(addr, key string) string {
+	prefix, _ := gateway.BasePath()
+	return webLinkAt(addr, key, prefix)
+}
+
+func webLinkAt(addr, key, prefix string) string {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		return "http://" + addr + "/?k=" + url.QueryEscape(key)
+		return "http://" + addr + prefix + "/?k=" + url.QueryEscape(key)
 	}
 	if ip := net.ParseIP(host); host == "" || ip != nil && ip.IsUnspecified() {
 		host = "127.0.0.1"
@@ -173,7 +178,7 @@ func webLink(addr, key string) string {
 	if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
 		scheme = gateway.Scheme()
 	}
-	return scheme + "://" + net.JoinHostPort(host, port) + "/?k=" + url.QueryEscape(key)
+	return scheme + "://" + net.JoinHostPort(host, port) + prefix + "/?k=" + url.QueryEscape(key)
 }
 
 // proxyLink is the page's link through a reverse proxy in front of a page
@@ -191,10 +196,15 @@ func proxyLink(key string) string {
 		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
 			return ""
 		}
+		prefix, _ := gateway.BasePath()
+		if prefix != "" && (u.Path == "" || u.Path == "/") {
+			u.Path = prefix
+		}
 		return strings.TrimRight(u.String(), "/") + key
 	}
+	prefix, _ := gateway.BasePath()
 	u, err := url.Parse(gateway.PublicURL())
-	if err != nil || u.Host == "" || u.Port() != "" {
+	if err != nil || u.Host == "" || u.Port() != "" && prefix == "" {
 		return ""
 	}
 	return strings.TrimRight(u.String(), "/") + key

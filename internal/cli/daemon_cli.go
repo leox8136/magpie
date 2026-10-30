@@ -257,7 +257,7 @@ func daemonInstall(w daemonWeb) error {
 // printDaemonWeb prints the service's page: its link, and on the network
 // its links there and what that lets anyone with one do.
 func printDaemonWeb(addr, key string) {
-	fmt.Println(muted.Render("  page   "), webLink(addr, key))
+	fmt.Println(muted.Render("  page   "), webLinkAt(addr, key, daemon.WebBasePath()))
 	host, port, _ := net.SplitHostPort(addr)
 	q := "/?k=" + key
 	if ip := net.ParseIP(host); host == "" || ip != nil && !ip.IsLoopback() {

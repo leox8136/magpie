@@ -1907,6 +1907,39 @@ another address there, Settings › About lists it beside the local URL, and
 About's Gateway URL and at the sidebar's foot. Local agent configs still
 use the local gateway address.
 
+To mount the whole service at a subpath, set `MAGPIE_BASE_PATH=/magpie`
+when starting magpie (a trailing slash is accepted). For example:
+
+```sh
+MAGPIE_BASE_PATH=/magpie MAGPIE_PUBLIC_URL=https://example.com magpie web
+```
+
+The browser page is then `https://example.com/magpie/`, and an OpenAI
+client's base URL is `https://example.com/magpie/v1`. The public URL may
+include `/magpie` explicitly; a different path is refused at startup.
+With a base path configured, an explicit port in `MAGPIE_PUBLIC_URL`
+also names this public endpoint, including the page. A separate
+`MAGPIE_WEB_URL` must name the page's full mounted URL (or just its origin).
+When the page and gateway run as separate processes, configure the same base
+path for both. The service installer carries the base path and public URL
+into its environment; update/reinstall an existing service to change these
+settings.
+
+Forward `/magpie/` to the browser listener **without stripping the prefix**.
+For nginx, a location can use `proxy_pass http://127.0.0.1:3430;` with no
+trailing slash. Keep the usual gateway sharing and gateway-key requirements
+below; the page's login cookie never authorizes model requests. The browser
+listener returns 404 outside the mount. The gateway's own listener also
+accepts the prefixed routes and keeps its original root routes for local
+agents. Expose the browser listener through the proxy for a single mounted
+service. `/magpie` redirects to `/magpie/`; assets, APIs, downloads, login
+cookies and plugin frames stay under the mount. Unset `MAGPIE_BASE_PATH`
+(or set it to `/`) for the original root deployment. Prefixes must be clean
+absolute paths containing only letters, digits, `/`, `-`, `_`, `.`, `~`;
+Existing route namespaces such as `/api`, `/v1` and `/_magpie` (including
+subpaths beneath them) are reserved and rejected at startup.
+`X-Forwarded-Prefix` cannot change the configured mount.
+
 Building an app or agent that should use magpie, or get a row on the
 Agents page: see [Integrating your app or agent](integrating.md).
 

@@ -1300,3 +1300,18 @@ configuration and denied-header rules are documented in
 [providers and accounts](providers-accounts.md#vendor-reply-headers).
 `TestReplyHeadersPassedOn`, `TestReplyHeadersOfTheReplyGiven`,
 `TestReplyHeadersOnCountTokens`, `TestReplyHeadersOnEmbeddings`.
+
+### HTTP path prefix
+
+`MAGPIE_BASE_PATH` is an explicit optional mount, validated by
+[`base_path.go`](../../internal/gateway/base_path.go). `Front` strips it
+before the existing LAN/origin/authentication guards and routing; the
+unprefixed routes remain available for local agents. Browser-port requests
+are still marked `FromPagePort` before reaching `Front`, so the prefix cannot
+turn a proxy into a trusted local caller. No forwarding header controls the
+mount. The wrapper passes the body through without buffering and preserves
+the response writer, including streaming and upgrades. Generated image MCP
+download URLs use the request mount when no public URL is configured.
+`MAGPIE_PUBLIC_URL` gains the mount when its path is empty; an explicit
+conflicting path is rejected. See the gateway and GUI `base_path_test.go`
+and [deployment instructions](../reference.md#connecting-anything-else).

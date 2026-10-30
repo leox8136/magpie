@@ -28,6 +28,7 @@ var notAnAgent = map[string]string{
 	"XDG_DATA_HOME":         "the same",
 	"XDG_DATA_DIRS":         "the system's own data folders, where a .deb puts Lody's desktop entry; a test that reaches agent.OpenLody sets it to its own",
 	"XDG_CACHE_HOME":        "Go's build cache's too, which a sandbox keeps shared; Air's ACP OpenCode under it is found by path in a test's own home (#2423)",
+	"MAGPIE_BASE_PATH":      "magpie's own HTTP mount, not an agent folder",
 	"MAGPIE_ADDR":           "magpie's own",
 	"MAGPIE_DEBUG":          "magpie's own debug flag",
 	"MAGPIE_PUBLIC_URL":     "magpie's own public URL",

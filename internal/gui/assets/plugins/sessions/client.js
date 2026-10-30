@@ -1069,7 +1069,7 @@ magpie.plugin("sessions", (ctx) => {
       e.stopPropagation();
       if (web) {
         const a = el("a");
-        a.href = "/api/sessions/markdown?" + q;
+        a.href = magpiePath("/api/sessions/markdown?" + q);
         a.download = "";
         a.click();
         return;

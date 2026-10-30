@@ -73,7 +73,7 @@
     f.setAttribute("referrerpolicy", "no-referrer");
     f.setAttribute("allow", "");
     f.title = titled(p.entry);
-    f.src = p.entry.url;
+    f.src = magpiePath(p.entry.url);
     p.frame = f;
     p.hello = false;
     p.ready = new Promise((resolve, reject) => {
@@ -156,7 +156,7 @@
     if (e.icon) {
       const img = document.createElement("img");
       img.className = "nav-ic";
-      img.src = e.icon;
+      img.src = magpiePath(e.icon);
       img.alt = "";
       img.width = img.height = 16;
       b.append(img);
@@ -300,7 +300,7 @@
     f.setAttribute("referrerpolicy", "no-referrer");
     f.setAttribute("allow", "");
     f.title = titled(e);
-    f.src = e.url;
+    f.src = magpiePath(e.url);
     const p = { entry: e, frame: f, context, body, hello: false, broken: false };
     p.timer = setTimeout(() => { if (!p.hello) panelBroke(p, t("{name}'s page didn't answer", { name: titled(e) })); }, HELLO_MS);
     panels.set(f, p);

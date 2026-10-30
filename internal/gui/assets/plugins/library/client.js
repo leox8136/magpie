@@ -192,7 +192,7 @@ magpie.plugin("library", (ctx) => {
     return `rgba(${y}, ${y}, ${y}, ${m[4] ?? 1})`;
   }
   async function greyCopy(src) {
-    const r = await fetch(src);
+    const r = await fetch(magpiePath(src));
     if (!r.ok) return null;
     let blob;
     if (/svg/.test(r.headers.get("content-type") || "") || /\.svg$/.test(src)) {
@@ -5159,14 +5159,14 @@ magpie.plugin("library", (ctx) => {
     img.decoding = "async";
     img.loading = "lazy";
     img.referrerPolicy = "no-referrer";
-    img.src = "/api/library/icon?u=" + encodeURIComponent(url);
+    img.src = magpiePath("/api/library/icon?u=" + encodeURIComponent(url));
     if (/\.svg(\?|$)/i.test(url)) box.classList.add("svg");
     // a first fetch from GitHub can fail once (magpie-community's avatar
     // showed an M on the user's first look), so it's asked once more
     img.onerror = () => {
       if (img.dataset.again) return fallback();
       img.dataset.again = "1";
-      setTimeout(() => { if (img.isConnected) img.src = "/api/library/icon?again=1&u=" + encodeURIComponent(url); }, 2000);
+      setTimeout(() => { if (img.isConnected) img.src = magpiePath("/api/library/icon?again=1&u=" + encodeURIComponent(url)); }, 2000);
     };
     box.append(img);
     return box;

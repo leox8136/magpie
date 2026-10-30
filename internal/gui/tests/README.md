@@ -2573,3 +2573,11 @@ that scrolls a box vertically is built from its selector, filled and pointed
 at, and has to hold the wheel; one that doesn't is named by file and
 selector. With the engine made to lack overscroll-behavior (Safari 15),
 compat.js still keeps Requests' list's wheel. Chromium and WebKit.
+
+The configured-mount cases in `plugin-page.test.cjs` boot the real shell
+at `/magpie/`, with `bootPrefs.basePath` set as the web server sets it.
+Both engines check API reads and writes, plugin frames, icons, relative
+bridge files and CSP, and refuse every request outside the mount. The same
+suite retains the root-deployment and sandbox regressions. Go's
+`base_path_test.go` covers the listener, login/cookie boundaries, gateway
+keys, streaming, escaped routes and forwarding to another gateway process.

@@ -120,7 +120,7 @@ async function api(path, body, heads, signal) {
   path = path.replace(/#/g, "%23");
   const same = body === undefined && readsSame(path);
   const had = same ? sameReads.get(path) : undefined;
-  const res = await fetch("/api/" + path, {
+  const res = await fetch(magpiePath("/api/" + path), {
     method: body === undefined ? "GET" : "POST",
     headers: had ? { "Content-Type": "application/json", "X-Magpie-Had": had.tag } : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -339,7 +339,7 @@ function icon(name, lazy) {
     // a picture the user gave their own provider
     const img = el("img");
     if (lazy) img.loading = "lazy";
-    img.src = "/api/icons/" + encodeURIComponent(name.slice(5));
+    img.src = magpiePath("/api/icons/" + encodeURIComponent(name.slice(5)));
     img.alt = "";
     img.draggable = false;
     img.onerror = () => e.replaceWith(icon("generic"));
@@ -4396,7 +4396,7 @@ async function backAsNew(was) {
   if (!web) return;
   for (let i = 0; i < 180; i++) {
     await new Promise((r) => setTimeout(r, 1000));
-    const u = await fetch("/api/update").then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    const u = await fetch(magpiePath("/api/update")).then((r) => (r.ok ? r.json() : null)).catch(() => null);
     if (u && u.current !== was) return location.reload();
   }
 }
@@ -6742,7 +6742,7 @@ function accountPlan(a) {
 // none copies, the page says so and shows the text to copy by hand.
 async function copy(text, what, btn, message) {
   const done = () => { status(message || t("{what} copied", { what }), "ok"); flashCopied(btn); };
-  const res = await fetch("/api/copy", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) }).catch(() => null);
+  const res = await fetch(magpiePath("/api/copy"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) }).catch(() => null);
   if (res && res.ok) return done();
   try { await navigator.clipboard.writeText(text); return done(); } catch {}
   if (copyByCommand(text)) return done();

@@ -71,6 +71,10 @@ const webRunKey = "MAGPIE_WEB_RUNKEY"
 // send with a POST (every change is one), so neither a page elsewhere nor
 // anyone else on the network reaches the settings and keys behind it.
 func StartWeb(addr, version string) (*Web, error) {
+	prefix, err := gateway.BasePath()
+	if err != nil {
+		return nil, err
+	}
 	Version = version
 	key, fixed, err := webKey()
 	if err != nil {
@@ -102,7 +106,7 @@ func StartWeb(addr, version string) (*Web, error) {
 	if ip := net.ParseIP(host); ip != nil && !ip.IsLoopback() {
 		scheme = gateway.Scheme()
 	}
-	w.Link = scheme + "://" + net.JoinHostPort(host, port) + "/?k=" + url.QueryEscape(key)
+	w.Link = scheme + "://" + net.JoinHostPort(host, port) + prefix + "/?k=" + url.QueryEscape(key)
 	w.srv = &http.Server{
 		Handler:           webServed(port, key, keep, Handler(webHost{quit}, startBackend())),
 		ReadHeaderTimeout: 30 * time.Second,
@@ -205,8 +209,8 @@ func webGuard(cookie, key string, keep time.Duration, next http.Handler) http.Ha
 		// other services share on other ports, and a browser keeps a
 		// limited number of cookies for one host, all ports together;
 		// past it Chrome drops the low and medium ones first (#2033)
-		rw.Header().Add("Set-Cookie", (&http.Cookie{Name: cookie, Value: key, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: int(keep / time.Second)}).String()+"; Priority=High")
-		http.Redirect(rw, r, back, http.StatusSeeOther)
+		rw.Header().Add("Set-Cookie", (&http.Cookie{Name: cookie, Value: key, Path: gateway.RequestBasePath(r) + "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: int(keep / time.Second)}).String()+"; Priority=High")
+		http.Redirect(rw, r, gateway.RequestBasePath(r)+back, http.StatusSeeOther)
 	}
 	return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		// a plugin's page's files: a sandboxed frame's requests carry no
@@ -303,7 +307,7 @@ func webTurnedAway(rw http.ResponseWriter, r *http.Request, back, why string) {
 <style>body{font:15px/1.5 system-ui,sans-serif;max-width:32em;margin:12vh auto;padding:0 16px;color:#222;background:#fafafa}@media(prefers-color-scheme:dark){body{color:#ddd;background:#1c1c1e}}input,button{font:inherit;padding:.4em .6em}input{width:100%%;box-sizing:border-box;margin:.5em 0}</style></head>
 <body><h1>magpie web</h1><p>%s</p><p>Paste the key (MAGPIE_WEB_KEY, or the k= in the link magpie web printed when it started):</p>
 <form method="post" action="%s"><input type="hidden" name="back" value="%s"><input type="password" name="key" autocomplete="current-password" autofocus required><button type="submit">Sign in</button></form></body></html>`,
-		html.EscapeString(why), webSignInPath, html.EscapeString(back))
+		html.EscapeString(why), gateway.RequestBasePath(r)+webSignInPath, html.EscapeString(back))
 }
 
 // NetworkLinks are the links to the page, served on port, that other
@@ -311,13 +315,15 @@ func webTurnedAway(rw http.ResponseWriter, r *http.Request, back, why string) {
 // of its own names the host the container's ports are published on, so
 // the page is at that host on its own port; one without (a reverse proxy's
 // https://magpie.example.com, #372) is where the page is, path and all.
+// With a configured mount the public URL always names that mounted endpoint.
 func NetworkLinks(port, key string) []string {
-	if u, err := url.Parse(gateway.PublicURL()); err == nil && u.Host != "" && u.Port() == "" {
+	prefix, _ := gateway.BasePath()
+	if u, err := url.Parse(gateway.PublicURL()); err == nil && u.Host != "" && (u.Port() == "" || prefix != "") {
 		return []string{strings.TrimRight(u.String(), "/") + key}
 	}
 	var out []string
 	for _, a := range LANAddrs() {
-		out = append(out, gateway.Scheme()+"://"+net.JoinHostPort(a, port)+key)
+		out = append(out, gateway.Scheme()+"://"+net.JoinHostPort(a, port)+prefix+key)
 	}
 	return out
 }
@@ -338,7 +344,13 @@ func LANAddrs() []string {
 // routes, judged by the gateway (onePort), and the page and its API behind
 // the allow list and the key.
 func webServed(port, key string, keep time.Duration, page http.Handler) http.Handler {
-	return onePort(gateway.AllowGuard(webHandler(port, key, keep, page)))
+	prefix, err := gateway.BasePath()
+	if err != nil {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		})
+	}
+	return gateway.MountBasePath(prefix, onePort(gateway.AllowGuard(webHandler(port, key, keep, page))), false)
 }
 
 // webHandler is what `magpie web` on port serves: the page and its API
@@ -445,6 +457,14 @@ var toGateway = &httputil.ReverseProxy{
 	Rewrite: func(pr *httputil.ProxyRequest) {
 		u, _ := url.Parse(gateway.URL())
 		pr.SetURL(u)
+		// The other process needs the mount too (notably for generated
+		// download URLs). Both processes use the same deployment prefix.
+		if prefix := gateway.RequestBasePath(pr.In); prefix != "" {
+			pr.Out.URL.Path = prefix + pr.Out.URL.Path
+			if pr.Out.URL.RawPath != "" {
+				pr.Out.URL.RawPath = prefix + pr.Out.URL.RawPath
+			}
+		}
 		pr.Out.Host = pr.In.Host
 		// Rewrite starts from a request with these taken off
 		for _, h := range []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto"} {

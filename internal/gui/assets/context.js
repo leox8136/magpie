@@ -945,7 +945,7 @@
   async function readText(id, kind, item) {
     const q = "id=" + encodeURIComponent(id) + "&kind=" + encodeURIComponent(kind) + (item === undefined ? "" : "&item=" + item);
     // fetched, not api(): the text isn't looked through for accounts
-    const res = await fetch("/api/context/text?" + q);
+    const res = await fetch(magpiePath("/api/context/text?" + q));
     if (res.status === 404) return null;
     if (!res.ok) throw new Error((await res.text()).trim() || res.statusText);
     return res.json();

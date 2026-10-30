@@ -372,8 +372,10 @@ func TestEnviron(t *testing.T) {
 	t.Setenv("PATH", "/a:/b")
 	t.Setenv("no_proxy", "localhost")
 	t.Setenv("MAGPIE_ADDR", "")
+	t.Setenv("MAGPIE_BASE_PATH", "/magpie")
+	t.Setenv("MAGPIE_PUBLIC_URL", "https://example.com/magpie")
 	got := strings.Join(environ(), "\n")
-	if !strings.Contains(got, "PATH=/a:/b") || !strings.Contains(got, "no_proxy=localhost") || strings.Contains(got, "MAGPIE_ADDR") {
+	if !strings.Contains(got, "PATH=/a:/b") || !strings.Contains(got, "no_proxy=localhost") || !strings.Contains(got, "MAGPIE_BASE_PATH=/magpie") || !strings.Contains(got, "MAGPIE_PUBLIC_URL=https://example.com/magpie") || strings.Contains(got, "MAGPIE_ADDR") {
 		t.Errorf("environ:\n%s", got)
 	}
 	if strings.Count(got, "PATH=/a:/b") != 1 {
@@ -562,5 +564,17 @@ func TestUninstallRecordsTheUsersNo(t *testing.T) {
 	}
 	if Removed() {
 		t.Fatal("still recorded after the user installed it")
+	}
+}
+
+func TestWebBasePathOfService(t *testing.T) {
+	for _, tc := range []struct{ config, want string }{
+		{`Environment="MAGPIE_BASE_PATH=/magpie"`, "/magpie"},
+		{`<key>MAGPIE_BASE_PATH</key><string>/tools/magpie/</string>`, "/tools/magpie"},
+		{`Environment="MAGPIE_WEB_KEY=secret"`, ""},
+	} {
+		if got := webBasePathOf(tc.config); got != tc.want {
+			t.Fatalf("service prefix %q, want %q", got, tc.want)
+		}
 	}
 }

@@ -1,6 +1,15 @@
 package cli
 
-import "testing"
+import (
+	"encoding/json"
+	"github.com/yetone/magpie/internal/settings"
+	"io"
+	"net"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 // magpie web on loopback behind a reverse proxy (#1479) prints the proxy's
 // link with the key when told the proxy's address, so nobody joins
@@ -52,5 +61,54 @@ func TestWebSamePort(t *testing.T) {
 		if got := samePort(c.a, c.b); got != c.want {
 			t.Errorf("samePort(%q, %q) = %v", c.a, c.b, got)
 		}
+	}
+}
+
+func TestWebLinksWithBasePath(t *testing.T) {
+	t.Setenv("MAGPIE_BASE_PATH", "/magpie")
+	t.Setenv("MAGPIE_PUBLIC_URL", "https://example.com:8443")
+	t.Setenv("MAGPIE_WEB_URL", "")
+	if got := webLink("127.0.0.1:3430", "key"); got != "http://127.0.0.1:3430/magpie/?k=key" {
+		t.Fatal(got)
+	}
+	if got := proxyLink("/?k=key"); got != "https://example.com:8443/magpie/?k=key" {
+		t.Fatal(got)
+	}
+}
+
+func TestWebOpensPublishedAppMount(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("MAGPIE_BASE_PATH", "")
+	t.Setenv("MAGPIE_PUBLIC_URL", "")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	port := ln.Addr().(*net.TCPAddr).Port
+	b, _ := json.Marshal(map[string]any{"mode": "local", "port": port, "key": "0123456789abcdef", "basePath": "/magpie"})
+	if err := os.MkdirAll(settings.Dir(), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(settings.Dir(), "web-page.json"), b, 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Capture the command's actual printed link without opening a browser.
+	out, err := os.CreateTemp(t.TempDir(), "stdout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer out.Close()
+	old := os.Stdout
+	os.Stdout = out
+	defer func() { os.Stdout = old }()
+	if err := webCmd([]string{"--no-open", "--addr", ln.Addr().String()}); err != nil {
+		t.Fatal(err)
+	}
+	out.Seek(0, 0)
+	printed, _ := io.ReadAll(out)
+	if !strings.Contains(string(printed), ln.Addr().String()+"/magpie/?k=0123456789abcdef") {
+		t.Fatalf("wrong app link: %s", printed)
 	}
 }

@@ -96,6 +96,13 @@ func publicURL() string {
 		warnInvalidPublicURL()
 		return ""
 	}
+	if prefix, err := BasePath(); err != nil {
+		warnInvalidPublicURL()
+		return ""
+	} else if prefix != "" && (parsed.Path == "" || parsed.Path == "/") {
+		parsed.Path = prefix
+		return parsed.String()
+	}
 	return u
 }
 

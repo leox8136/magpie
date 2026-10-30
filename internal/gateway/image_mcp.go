@@ -651,7 +651,7 @@ func imageMCPBase(r *http.Request) string {
 	if r.TLS != nil {
 		scheme = "https"
 	}
-	return scheme + "://" + r.Host
+	return scheme + "://" + r.Host + RequestBasePath(r)
 }
 
 // inProcess is r, an MCP request, as a request of the gateway's own API at

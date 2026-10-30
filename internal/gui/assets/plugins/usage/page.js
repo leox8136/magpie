@@ -25,7 +25,7 @@ async function downloadArchive(name, b) {
   const q = `date=${encodeURIComponent(date)}&id=${encodeURIComponent(aid)}`;
   if (web) {
     const a = el("a");
-    a.href = "/api/archive/file?" + q;
+    a.href = magpiePath("/api/archive/file?" + q);
     a.download = "";
     a.click();
     return;
@@ -2272,7 +2272,7 @@ function renderLedger() {
     // in a browser the file comes to it; in the app it goes to Downloads
     if (web) {
       const a = el("a");
-      a.href = "/api/usage/requests.csv?" + ledParams();
+      a.href = magpiePath("/api/usage/requests.csv?" + ledParams());
       a.download = "";
       a.click();
       return;

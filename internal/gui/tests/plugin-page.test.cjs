@@ -38,8 +38,8 @@ const pages = [
 
 // what pluginpage.go's pagePolicy sends, for this host: the page's folder
 // under each scheme the window is served on
-const policy = (tok) => {
-  const dir = `magpie.test/_magpie/plugin/${tok}/`;
+const policy = (tok, prefix = "") => {
+  const dir = `magpie.test${prefix}/_magpie/plugin/${tok}/`;
   const own = `wails://${dir} http://${dir} https://${dir}`;
   return [
     "sandbox allow-scripts", "default-src 'none'", `script-src ${own}`, `style-src ${own} 'unsafe-inline'`,
@@ -67,16 +67,23 @@ const PROBE_JS = `(async () => {
 })();`;
 const BROKEN_HTML = `<!doctype html><meta charset="utf-8"><script src="_magpie/bridge.js"></script><script src="app.js"></script><p id="ok">drawn</p>`;
 
-function server(lang, seen, plugins) {
+function server(lang, seen, plugins, prefix = "") {
   return async (route) => {
     const req = route.request();
     const url = new URL(req.url());
+    if (prefix) {
+      if (!url.pathname.startsWith(prefix + "/")) {
+        (seen.outside ||= []).push(url.pathname);
+        return route.fulfill({ status: 404, body: "" });
+      }
+      url.pathname = url.pathname.slice(prefix.length);
+    }
     const json = (data) => route.fulfill({ json: data });
     if (url.searchParams.get("probe")) {
       seen.api.push(await req.allHeaders());
       return route.fulfill({ status: 403, body: "" });
     }
-    if (url.pathname === "/boot.js") return route.fulfill({ contentType: "text/javascript", body: `window.bootPrefs = {lang:${JSON.stringify(lang)},theme:"light",web:false};` });
+    if (url.pathname === "/boot.js") return route.fulfill({ contentType: "text/javascript", body: `window.bootPrefs = {lang:${JSON.stringify(lang)},theme:"light",web:${!!prefix},basePath:${JSON.stringify(prefix)}};` });
     if (url.pathname === "/wails/runtime.js") return route.fulfill({ contentType: "text/javascript", body: "export const Window = {};" });
     if (url.pathname === "/api/state") return json({ agents: [], profiles: [], settings: { lang, theme: "light" } });
     if (url.pathname === "/api/providers" && seen.slow) await new Promise((r) => setTimeout(r, seen.slow));
@@ -102,7 +109,7 @@ function server(lang, seen, plugins) {
     if (m) {
       const [, tok, rel] = m;
       const headers = { "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "Cache-Control": "no-cache" };
-      if (tok !== OPEN) headers["Content-Security-Policy"] = policy(tok);
+      if (tok !== OPEN) headers["Content-Security-Policy"] = policy(tok, prefix);
       const type = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml" }[path.extname(rel)];
       let body;
       if (rel === "_magpie/bridge.js") body = await fs.readFile(bridge);
@@ -134,6 +141,32 @@ async function frameReady(page, tok) {
 }
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
+  test(`${engine}: the shell and plugin bridge stay under the configured mount`, async (t) => {
+    const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
+    t.after(() => browser.close());
+    const page = await browser.newPage();
+    const seen = { api: [], reads: [], options: [], outside: [] };
+    const errors = [];
+    page.on("pageerror", (e) => errors.push(e.message));
+    await page.route("**/*", server("en", seen, plugins, "/magpie"));
+    await page.goto("http://magpie.test/magpie/");
+    await page.locator("#nav button[data-plugin-page]").first().waitFor();
+    await page.evaluate(() => show("plugin-glance"));
+    const glance = await frameReady(page, GLANCE);
+    await glance.waitForFunction(() => document.getElementById("cost").textContent === "$0.50");
+    assert.equal(await glance.locator("#calls").textContent(), "12 calls, 1234 tokens");
+    assert.ok(glance.url().startsWith(`http://magpie.test/magpie/_magpie/plugin/${GLANCE}/`));
+    await glance.locator("#hide").click();
+    await glance.waitForFunction(() => document.getElementById("cost").textContent === "");
+    assert.equal(seen.options[0].options.hideCost, true);
+    assert.deepEqual(await page.evaluate(() => [
+      magpiePath("/api/state"), magpiePath("/magpie/api/state"),
+      magpiePath("https://other.test/api/state"), magpiePath("//other.test/file"),
+    ]), ["/magpie/api/state", "/magpie/api/state", "https://other.test/api/state", "//other.test/file"]);
+    assert.deepEqual(seen.outside, []);
+    assert.deepEqual(errors, []);
+  });
+
   test(`${engine}: a plugin's page draws in its frame, shut in`, async (t) => {
     const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
     t.after(() => browser.close());

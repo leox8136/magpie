@@ -36,7 +36,7 @@
   async function poll() {
     if (document.visibilityState === "visible") {
       try {
-        const r = await fetch("/api/omarchy", { cache: "no-store" });
+        const r = await fetch(magpiePath("/api/omarchy"), { cache: "no-store" });
         if (r.ok) apply(await r.json());
       } catch {}
     }

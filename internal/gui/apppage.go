@@ -46,9 +46,10 @@ const appPageDefaultPort = 3430
 // appPageConf is web-page.json: Mode "" (off), "local" or "lan"; Port 0
 // for appPageDefaultPort; Key the link's.
 type appPageConf struct {
-	Mode string `json:"mode,omitempty"`
-	Port int    `json:"port,omitempty"`
-	Key  string `json:"key,omitempty"`
+	BasePath string `json:"basePath,omitempty"` // last mount published by the serving app
+	Mode     string `json:"mode,omitempty"`
+	Port     int    `json:"port,omitempty"`
+	Key      string `json:"key,omitempty"`
 }
 
 func (c appPageConf) port() int {
@@ -115,6 +116,16 @@ func AppPage() (addr, key string) {
 		return "", ""
 	}
 	return c.addr(), c.Key
+}
+
+// AppPageBasePath reads the serving app's published mount, independently
+// of the shell that is opening it. Older configurations mean a root mount.
+func AppPageBasePath() string {
+	c, err := loadAppPage()
+	if err != nil {
+		return ""
+	}
+	return c.BasePath
 }
 
 // appWebHost is the Windows a browser on the app's page stands for: a
@@ -190,6 +201,10 @@ func (p *appPage) waiting() bool {
 // apply brings what is served to what web-page.json says.
 func (p *appPage) apply() {
 	c, err := loadAppPage()
+	var prefix string
+	if err == nil {
+		prefix, err = gateway.BasePath()
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.mk == nil {
@@ -234,6 +249,14 @@ func (p *appPage) apply() {
 		p.err = err.Error()
 		return
 	}
+	if c.BasePath != prefix {
+		c.BasePath = prefix
+		if err := saveAppPage(c); err != nil {
+			ln.Close()
+			p.err = err.Error()
+			return
+		}
+	}
 	p.srv = &http.Server{
 		Handler:           http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) { (*p.cur.Load()).ServeHTTP(rw, r) }),
 		ReadHeaderTimeout: 30 * time.Second,
@@ -273,7 +296,8 @@ func (p *appPage) state() appPageJSON {
 		return s
 	}
 	k := "/?k=" + url.QueryEscape(c.Key)
-	s.Link = "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(c.port())) + k
+	prefix, _ := gateway.BasePath()
+	s.Link = "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(c.port())) + prefix + k
 	if c.Mode == "lan" {
 		s.Network = NetworkLinks(strconv.Itoa(c.port()), k)
 	}

@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/yetone/magpie/internal/gateway"
 	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/usage"
@@ -215,7 +216,7 @@ func pagePolicy(r *http.Request, tok string) string {
 	own := "'self'"
 	if r.Host != "" {
 		// the page's own folder: not the window's files, nor /api
-		own = r.Host + pluginPagePrefix + tok + "/"
+		own = r.Host + gateway.RequestBasePath(r) + pluginPagePrefix + tok + "/"
 		// WebKit does not match a scheme-less host source under wails://.
 		// Only the native handler supplies this scheme; web keeps its
 		// relative source so HTTP, HTTPS and reverse proxies still work.
@@ -374,12 +375,21 @@ func pluginPageRoutes(mux *http.ServeMux) {
 		if out == nil {
 			out = []pluginPage{}
 		}
+		for i := range out {
+			out[i].URL = gateway.RequestBasePath(r) + out[i].URL
+			if out[i].Icon != "" {
+				out[i].Icon = gateway.RequestBasePath(r) + out[i].Icon
+			}
+		}
 		writeJSON(rw, out)
 	})
 	mux.HandleFunc("GET /api/plugin-panels", func(rw http.ResponseWriter, r *http.Request) {
 		_, out := windowParts()
 		if out == nil {
 			out = []pluginPanel{}
+		}
+		for i := range out {
+			out[i].URL = gateway.RequestBasePath(r) + out[i].URL
 		}
 		writeJSON(rw, out)
 	})
