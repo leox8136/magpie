@@ -87,6 +87,8 @@ type providerJSON struct {
 	Headers   map[string]string `json:"headers,omitempty"`
 	// JSON fields added to each request's body (provider.ExtraBody, #1604)
 	ExtraBody provider.ExtraBody `json:"extraBody,omitempty"`
+	// headers of the vendor's reply passed on (provider.ReplyHeaders, #4145)
+	ReplyHeaders []string `json:"replyHeaders,omitempty"`
 	// the API the user gave a custom provider's Base URL as (BaseAPI)
 	BaseAPI string `json:"baseAPI,omitempty"`
 	// the vendor searches the web by itself (provider.Searches)
@@ -601,7 +603,7 @@ func providerInfoWith(p provider.Provider, agents []agentUse, desktop map[string
 		ID: p.ID, Name: p.Name, Icon: p.Icon, Preset: p.Preset, Host: p.Host(),
 		Chat: p.Chat, Responses: p.Responses, Anthropic: p.Anthropic, Gemini: p.Gemini, Decide: p.Decide, BaseAPI: p.BaseAPI, ModelTest: p.ModelTest(), TestsAs: p.TestClients(), DecideTest: p.AsksDecideModels(), MarksKinds: p.MarksKinds(),
 		Catalog: p.Catalog, Website: p.Website, KeysURL: p.KeysURL,
-		Proxy: p.Proxy, AccountProxies: p.AccountProxies, AccountModels: p.AccountModels, AccountCaps: p.AccountCaps, AccountWindowCaps: p.AccountWindowCaps, AccountNames: p.AccountNames, Headers: p.Headers, ExtraBody: p.ExtraBody, Searches: p.Searches, Cline: p.ClinePinnable(), PinUpstream: p.PinUpstream, Unredacted: p.Unredacted, InsecureTLS: p.InsecureTLS, TakesInsecureTLS: p.TakesInsecureTLS(), LimitRestOff: p.LimitRestOff, NativeCompaction: p.NativeCompaction, CarriesCompaction: p.CarriesCompaction(), PassUserAgent: p.PassUserAgent, OwnClient: p.OwnClient(), AuthHeader: p.AuthHeader, BothAuth: p.BothAuth(), BalanceURL: p.BalanceURL, BalancePath: p.BalancePath, BalanceMethod: p.BalanceMethod, ModelsURL: p.ModelsURL,
+		Proxy: p.Proxy, AccountProxies: p.AccountProxies, AccountModels: p.AccountModels, AccountCaps: p.AccountCaps, AccountWindowCaps: p.AccountWindowCaps, AccountNames: p.AccountNames, Headers: p.Headers, ExtraBody: p.ExtraBody, ReplyHeaders: p.ReplyHeaders, Searches: p.Searches, Cline: p.ClinePinnable(), PinUpstream: p.PinUpstream, Unredacted: p.Unredacted, InsecureTLS: p.InsecureTLS, TakesInsecureTLS: p.TakesInsecureTLS(), LimitRestOff: p.LimitRestOff, NativeCompaction: p.NativeCompaction, CarriesCompaction: p.CarriesCompaction(), PassUserAgent: p.PassUserAgent, OwnClient: p.OwnClient(), AuthHeader: p.AuthHeader, BothAuth: p.BothAuth(), BalanceURL: p.BalanceURL, BalancePath: p.BalancePath, BalanceMethod: p.BalanceMethod, ModelsURL: p.ModelsURL,
 		Ready: p.Ready(), Chosen: p.Picks(), Models: []modelJSON{}, Agents: []providerAgent{},
 		Fallback: p.Fallback, Routing: p.Routing, Sink: p.Sink, Affinity: p.Affinity, KeepLogin: p.KeepLogin, KeepLoginAs: p.KeepLoginAs, SwitchOnly: p.SwitchOnly, CapStop: p.CapStop, CapCareful: p.CapCareful, Unlisted: p.Unlisted, NoModels: p.ServesNone(), Off: p.Off, Contexts: p.Contexts,
 		MaxConcurrency: p.MaxConcurrency, PluginConcurrency: p.PluginConcurrency(), PriceRate: p.PriceRate,
@@ -1386,6 +1388,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				pr.ZhipuTeam = in.ZhipuTeam
 				pr.NoModels = in.NoModels
 				pr.ExtraBody = in.ExtraBody
+				pr.ReplyHeaders = in.ReplyHeaders
 				pr.SecretAccessKey = in.SecretAccessKey
 				pr.Vertex = in.Vertex
 				pr.Searches = in.Searches
@@ -1419,6 +1422,11 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			// fields the body can't be given are refused, not dropped
 			// unseen (#1604)
 			if why := provider.ExtraBodyOK(in.ExtraBody); why != "" {
+				fail(rw, errors.New(why))
+				return
+			}
+			// and reply headers magpie never passes on (#4145)
+			if why := provider.ReplyHeadersOK(in.ReplyHeaders); why != "" {
 				fail(rw, errors.New(why))
 				return
 			}
@@ -1604,6 +1612,10 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				// and its extra body fields: {} clears them
 				if in.ExtraBody == nil && old != nil {
 					in.ExtraBody = old.ExtraBody
+				}
+				// and the reply headers passed on: [] clears them
+				if in.ReplyHeaders == nil && old != nil {
+					in.ReplyHeaders = old.ReplyHeaders
 				}
 				// Select none likewise, while nothing is picked (#1818)
 				if req.NoModels == nil && old != nil {

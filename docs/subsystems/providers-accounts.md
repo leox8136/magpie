@@ -284,6 +284,20 @@ and `TestHistoricalWindowHoldsUsesEachWindowsOwnReading`.
   `TestCodexRefreshWaitsForAnotherMagpie`,
   `TestChatGPTAPIRefreshWaitsForAnotherMagpie`.
 
+## Vendor reply headers
+
+`Provider.ReplyHeaders` (`replyHeaders` in providers.json and the editor's
+Advanced section) selects additional vendor response headers passed to the
+caller. Request-Id, X-Request-Id and X-Oneapi-Request-Id are included by default.
+Names are canonicalized, deduplicated and validated on save; manually saved
+forbidden fields are dropped on read. Provider clones own their header lists.
+[`replyheaders.go`](../../internal/provider/replyheaders.go) is the source of
+truth for the forbidden names and prefixes, shared with the editor's guard.
+Cookies, credentials, CORS, framing, gateway-owned fields and hop-by-hop fields
+(including names nominated by Connection) never pass through. Tests:
+`TestReplyHeadersList`, `TestReplyHeadersConnectionFieldsStayLocal`,
+`TestReplyHeadersNeverAsTheProvidersAre` and `reply-headers.test.cjs`.
+
 ## Verification
 
 ```sh

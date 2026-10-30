@@ -7848,7 +7848,7 @@ document.addEventListener("click", (e) => {
 // advancedSet says whether a setting under the editor's Advanced is set,
 // which opens it: none hides behind a fold
 function advancedSet(d, p) {
-  return (d.headers || []).some(([k]) => (k || "").trim()) || !!(d.extraBody || "").trim() ||
+  return (d.headers || []).some(([k]) => (k || "").trim()) || !!(d.extraBody || "").trim() || !!(d.replyHeaders || "").trim() ||
     !!d.proxyMode || Object.values(d.accountProxies || {}).some((x) => x?.mode) ||
     [d.concurrency, d.queueLimit, d.queueWait, d.maxRPM, d.priceRate, d.contexts, d.outputs, d.compacts].some((v) => String(v ?? "").trim()) ||
     !!(d.searches || d.authHeader || d.passUserAgent || d.unredacted || d.pinUpstream || d.nativeCompaction || d.balanceToken || d.limitRestOff) ||
@@ -8163,6 +8163,22 @@ function parses(s) { try { JSON.parse(s); return true; } catch { return false; }
 const EXTRA_BODY_RESERVED = ["model", "stream", "messages", "input", "contents", "system", "systemInstruction", "system_instruction", "instructions", "tools"];
 function extraBodyText(obj) {
   return obj && Object.keys(obj).length ? JSON.stringify(obj, null, 2) : "";
+}
+// Reply headers magpie never passes on to the agent, listed or not, as
+// provider.ReplyHeaderPassable refuses them on a save (reply-headers' Go
+// test holds the two lists the same): the reply's framing, cookies,
+// sign-ins, CORS and magpie's own (#4145).
+const REPLY_NEVER = ["alt-svc", "api-key", "authentication-info", "authorization", "cache-control", "clear-site-data", "connection", "content-security-policy", "cookie", "date", "host", "keep-alive", "link", "location", "origin", "refresh", "retry-after", "server", "set-cookie", "set-cookie2", "strict-transport-security", "te", "trailer", "transfer-encoding", "upgrade", "vary", "www-authenticate", "x-accel-buffering", "x-api-key"];
+const REPLY_NEVER_PREFIX = ["content-", "proxy-", "access-control-", "sec-", "x-magpie-"];
+// replyHeadersOf is the list a save sends, or why it can't be saved
+function replyHeadersOf(text) {
+  const value = (text || "").split(",").map((x) => x.trim()).filter(Boolean);
+  for (const n of value) {
+    if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(n)) return { value, error: t("\"{h}\" isn't a header name", { h: n }) };
+    const k = n.toLowerCase();
+    if (REPLY_NEVER.includes(k) || REPLY_NEVER_PREFIX.some((x) => k.startsWith(x))) return { value, error: t("{h} is never passed on: magpie writes it, or it would act on magpie's own address", { h: n }) };
+  }
+  return { value };
 }
 // extraBodyOf is the object a save sends ({} for none), or why it can't be
 function extraBodyOf(text) {
@@ -8970,7 +8986,7 @@ function baseAPIOf(p) {
 
 // draftOf is a saved provider as its editor's form holds it.
 function draftOf(p) {
-  return { id: p.id, name: p.name, preset: p.preset, chat: p.chat, responses: p.responses, anthropic: p.anthropic, gemini: p.gemini || "", catalog: p.catalog, decide: p.decide || "", key: "", api: baseAPIOf(p), chosen: pickedOf(p), none: !!p.noModels, extra: [], headers: headerRows(p.headers), extraBody: extraBodyText(p.extraBody), icon: p.icon || "", fallback: [...(p.fallback || [])], unlisted: !!p.unlisted, searches: !!p.searches, unredacted: !!p.unredacted, insecureTLS: !!p.insecureTLS, limitRestOff: !!p.limitRestOff, nativeCompaction: !!p.nativeCompaction, passUserAgent: !!p.passUserAgent, pinUpstream: !!p.pinUpstream, authHeader: p.authHeader || "", balanceURL: p.balanceURL || "", balancePath: p.balancePath || "", balanceMethod: p.balanceMethod || "", modelsURL: p.modelsURL || "", contexts: contextsText(p.contexts), outputs: contextsText(p.outputs), compacts: contextsText(p.compacts), keysUrl: p.keysUrl || "", ...proxyDraft(p), ...concurrencyDraft(p) };
+  return { id: p.id, name: p.name, preset: p.preset, chat: p.chat, responses: p.responses, anthropic: p.anthropic, gemini: p.gemini || "", catalog: p.catalog, decide: p.decide || "", key: "", api: baseAPIOf(p), chosen: pickedOf(p), none: !!p.noModels, extra: [], headers: headerRows(p.headers), extraBody: extraBodyText(p.extraBody), replyHeaders: (p.replyHeaders || []).join(", "), icon: p.icon || "", fallback: [...(p.fallback || [])], unlisted: !!p.unlisted, searches: !!p.searches, unredacted: !!p.unredacted, insecureTLS: !!p.insecureTLS, limitRestOff: !!p.limitRestOff, nativeCompaction: !!p.nativeCompaction, passUserAgent: !!p.passUserAgent, pinUpstream: !!p.pinUpstream, authHeader: p.authHeader || "", balanceURL: p.balanceURL || "", balancePath: p.balancePath || "", balanceMethod: p.balanceMethod || "", modelsURL: p.modelsURL || "", contexts: contextsText(p.contexts), outputs: contextsText(p.outputs), compacts: contextsText(p.compacts), keysUrl: p.keysUrl || "", ...proxyDraft(p), ...concurrencyDraft(p) };
 }
 
 // duplicateProvider opens the Add form on a copy of p (#268): its URLs,
@@ -9487,6 +9503,11 @@ function drawEditor(p, presetID) {
   }
   // and JSON fields of the user's own for each request's body (#1604)
   advIn.append(...field(t("Extra body"), extraBodyEditor(), t("JSON fields added to the body of every request to the vendor. A field the request has already is kept; write \"!name\" to replace it. ${sessionId} is the conversation's id.")));
+  // and headers of the vendor's reply passed on to the agent (#4145)
+  const replyIn = input(draft.replyHeaders || "", "X-Trace-Id, X-Foo");
+  replyIn.classList.add("reply-headers");
+  replyIn.oninput = () => { draft.replyHeaders = replyIn.value; };
+  advIn.append(...field(t("Reply headers"), replyIn, t("Headers of the vendor's reply passed on to the agent, separated by commas, in any case. Request IDs (X-Request-Id, Request-Id, X-OneAPI-Request-ID) always are; cookies, CORS and the body's own headers never.")));
   const proxies = el("div", "stack");
   proxies.append(proxyPicker());
   const perKey = keyProxyPicker(p);
@@ -9910,6 +9931,9 @@ function drawEditor(p, presetID) {
     const xb = extraBodyOf(draft.extraBody);
     if (xb.error) { shown(ed.querySelector(".extra-body textarea"))?.focus({ preventScroll: true }); return editorError(t("Extra body: {why}", { why: xb.error }), "warn"); }
     body.extraBody = xb.value;
+    const rh = replyHeadersOf(draft.replyHeaders);
+    if (rh.error) { shown(ed.querySelector(".reply-headers"))?.focus({ preventScroll: true }); return editorError(t("Reply headers: {why}", { why: rh.error }), "warn"); }
+    body.replyHeaders = rh.value;
     if (decides || custom) body.decide = (custom && draft.api !== "decide" && !p?.decide ? "" : draft.decide || "").trim();
     if ((body.decide || "").includes(WORKSPACE)) { ed.querySelector(".workspace-id")?.focus({ preventScroll: true }); return editorError(t("Give the workspace ID your API key belongs to, or pick the Token Plan"), "warn"); }
     if (custom) {

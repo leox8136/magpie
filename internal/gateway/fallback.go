@@ -1866,6 +1866,10 @@ type holdWriter struct {
 	// before it was complete" and its 429 halfway went to the summary
 	// as the only answer, the next account never asked
 	wantWhole bool
+
+	// upstreamKeys are the headers of the vendor's reply heardUpstream put
+	// in header (#4145)
+	upstreamKeys []string
 }
 
 // onLoop sets what is told of a loop before it ends the reply (reask),

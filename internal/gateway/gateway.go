@@ -1508,10 +1508,12 @@ func (s *Server) countOn(w http.ResponseWriter, r *http.Request, p provider.Prov
 				}
 			}
 			keepRetryOut(w.Header(), res.Header, b)
+			passReplyHeaders(w.Header(), c.p, res)
 			writeError(w, provider.Anthropic, res.StatusCode, c.p.Explain(c.p.Name+": "+provider.APIError(b, res.Status), res.StatusCode, b))
 			return
 		}
 		defer res.Body.Close()
+		passReplyHeaders(w.Header(), c.p, res)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(res.StatusCode)
 		io.Copy(w, res.Body)
@@ -2941,6 +2943,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// step of its way out, for the Routing page to say whose time
 			// a slow turn was (TryNet)
 			ctx = httptrace.WithClientTrace(ctx, nt.hooks(&asking, &asked, &wrote))
+			// the headers of its vendor's reply the provider passes on go
+			// with the try's own, to the agent if it is the one it gets
+			// (#4145)
+			ctx = withReplySink(ctx, c.p.ID, hw.heardUpstream)
 			// a key or account with a MaxConcurrency is asked once one of
 			// its slots is free, in turn; the agent gone while it waits,
 			// nothing is sent (the 499 below)
@@ -4204,8 +4210,15 @@ func markAntigravityRefused(w http.ResponseWriter, p provider.Provider, system, 
 // Unexpected value(s) `x` for the `anthropic-beta` header) is asked again
 // once without them, and they're left out for it from then on. An account's
 // 403 or 400 it can mend (Provider.Retry) is asked again, a few times at most.
-func (s *Server) forward(ctx context.Context, p provider.Provider, to provider.Protocol, path string, body []byte, in http.Header) (*http.Response, error) {
-	res, err := s.forwardOnce(ctx, p, to, path, body, in)
+func (s *Server) forward(ctx context.Context, p provider.Provider, to provider.Protocol, path string, body []byte, in http.Header) (res *http.Response, err error) {
+	// the reply it returns says which of its headers go to the agent
+	// (#4145), not one asked before it
+	defer func() {
+		if err == nil {
+			heardReply(ctx, p, res)
+		}
+	}()
+	res, err = s.forwardOnce(ctx, p, to, path, body, in)
 	if err == nil && mantleRoutes(p, to) {
 		res, err = s.mantleReroute(ctx, p, to, path, body, in, res)
 	}
@@ -5063,6 +5076,8 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 				// other API left, a group's next member is asked, and the
 				// agent is told the Responses URL to set
 				s.markUnfit(p.ID, offRefused(model), proto)
+				// the refusal is the reply, its headers the ones passed on
+				heardReply(r.Context(), p, res)
 			} else {
 				res = off
 			}
@@ -5128,10 +5143,10 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 		w = gather
 	}
 	h := w.Header()
-	for _, k := range []string{"Content-Type", "Request-Id", "X-Request-Id"} {
-		if v := res.Header.Get(k); v != "" {
-			h.Set(k, v)
-		}
+	// Request IDs already came through the try's filtered reply sink. A
+	// direct copy here would bypass Connection's hop-by-hop exclusions.
+	if v := res.Header.Get("Content-Type"); v != "" {
+		h.Set("Content-Type", v)
 	}
 	if sse {
 		h.Set("Cache-Control", "no-cache")

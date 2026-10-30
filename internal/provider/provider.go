@@ -225,6 +225,15 @@ type Provider struct {
 	// id (extrabody.go). Signed-in agent accounts ignore it, as Headers.
 	ExtraBody ExtraBody `json:"extraBody,omitempty"`
 
+	// ReplyHeaders are headers of the vendor's reply passed on to the
+	// agent, beside DefaultReplyHeaders, whatever their case (#4145): a
+	// relay's own request id (X-Oneapi-Request-Id), for the agent's side
+	// to match with the relay's logs. Streamed or whole, an error too, on
+	// every API, translated or not; only the reply the agent is given
+	// has its headers passed on. One magpie writes itself, or that would
+	// act on magpie's address, never is (ReplyHeaderPassable).
+	ReplyHeaders []string `json:"replyHeaders,omitempty"`
+
 	// Searches says the vendor answers a web search tool offered on its
 	// Anthropic or Responses API by itself (web_search_20250305,
 	// web_search): a relay in front of Anthropic's or OpenAI's API, which
@@ -661,6 +670,7 @@ func (p Provider) clone() Provider {
 	p.AutoInclude = slices.Clone(p.AutoInclude)
 	p.Headers = maps.Clone(p.Headers)
 	p.ExtraBody = maps.Clone(p.ExtraBody)
+	p.ReplyHeaders = slices.Clone(p.ReplyHeaders)
 	p.AccountProxies = maps.Clone(p.AccountProxies)
 	p.AccountCaps = maps.Clone(p.AccountCaps)
 	p.AccountNames = maps.Clone(p.AccountNames)
@@ -759,6 +769,7 @@ func withPicks(a, pk Provider) Provider {
 	// the extra body fields written for it, which a ChatGPT account's
 	// requests take (WithExtraBody, magpie-releases#18)
 	a.ExtraBody = pk.ExtraBody
+	a.ReplyHeaders = pk.ReplyHeaders
 	return a
 }
 
@@ -1443,6 +1454,7 @@ func normalize(p Provider) Provider {
 	// endpoints and catalog, the headers say which workspace or app it is
 	p.Headers = cleanHeaders(p.Headers)
 	p.ExtraBody = cleanExtraBody(p.ExtraBody)
+	p.ReplyHeaders = cleanReplyHeaders(p.ReplyHeaders)
 	if pr := Preset(p.Preset); pr != nil {
 		if p.Icon == "" {
 			p.Icon = pr.Icon

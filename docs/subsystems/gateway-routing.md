@@ -1283,3 +1283,20 @@ unattempted candidates are neither asked nor rested. An earlier refusal can
 still fail over within the remaining time; ordinary Chat classifiers keep
 their existing timeout behavior. `TestDecisionTriesShareTheClassifierWait`,
 `TestDecisionProviderKeysFailOver`.
+
+## Vendor request IDs and selected reply headers
+
+A try's reply headers travel with its held reply (`withReplySink`,
+`heardReply`, `holdWriter.heardUpstream` in
+[`reply_headers.go`](../../internal/gateway/reply_headers.go)). Only the final
+reply kept for the caller supplies headers; an earlier failed candidate, a
+side model and an earlier compatibility retry cannot leave theirs behind.
+`countOn` applies the same provider filter directly; retrieval keeps each
+candidate's headers separately. This covers translated and relayed model
+requests, count_tokens, embeddings and the existing audio endpoints. Images
+and video retain their existing behavior. A keepalive that already sent
+headers before upstream answered cannot add later request IDs. Provider
+configuration and denied-header rules are documented in
+[providers and accounts](providers-accounts.md#vendor-reply-headers).
+`TestReplyHeadersPassedOn`, `TestReplyHeadersOfTheReplyGiven`,
+`TestReplyHeadersOnCountTokens`, `TestReplyHeadersOnEmbeddings`.
