@@ -1264,3 +1264,12 @@ request cancellation, Retry-After and existing patience limits still bound
 retrying. This complements restoring a provider's primary on a new user turn.
 Tests: `TestGroupRelayBlipDoesNotEndOnSpentLast`, `TestGroupSpentLastAccountRests`,
 `TestCodexSpentGrokFailingIsTold`, `TestAntigravityTurnedAwayLastIsNoQuota`.
+
+Decision/System One classifier attempts share one configured timeout across
+keys, accounts and failover members (`askDecideTries`, `askJev` in
+[`decide_group.go`](../../internal/gateway/decide_group.go) and
+[`decide.go`](../../internal/gateway/decide.go)). Once that deadline is spent,
+unattempted candidates are neither asked nor rested. An earlier refusal can
+still fail over within the remaining time; ordinary Chat classifiers keep
+their existing timeout behavior. `TestDecisionTriesShareTheClassifierWait`,
+`TestDecisionProviderKeysFailOver`.
