@@ -408,6 +408,12 @@ reused authentication snapshots; inferred model patterns are not persisted as
 explicit picks. `TestAccountsOnlyAuthenticationKeepsOwnedCurrentPolicy` checks
 permission updates, ownership and preservation of budget/concurrency policy.
 
+Generic failure backoff advances only after the previous rest has ended:
+retries while the account or model still rests for the same generic failure
+keep its current step (`backingOff`, `TestOneRequestDoesNotClimbTheBackoff`).
+A single request's patience retries therefore cannot multiply one outage into
+the maximum backoff for every account.
+
 Budget reservations, window initialization and settlement use a lock per
 key and usage-log path (`budget.stateFor`). A slow settlement for one key
 leaves another key's warm-window admission available. Log appends remain
