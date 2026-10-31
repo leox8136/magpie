@@ -779,7 +779,7 @@ func (s *Server) Handler() http.Handler {
 	// the goroutine dump first, ahead of every lock the rest can be stuck
 	// on (dumpFirst)
 	// a socket's turns go through all of it again (socketEntry)
-	return socketEntry(s.dumpFirst(s.counted(holdCatalog(corsGuard(callerGuard(readOnlyGuard(mux, withCaller(s.callerLimited(keyLimited(mux))))))))))
+	return socketEntry(s.dumpFirst(s.counted(holdCatalog(corsGuard(callerGuard(readOnlyGuard(mux, withCaller(s.callerLimited(s.previousResponses(keyLimited(mux)))))))))))
 }
 
 // routes are the client APIs, each by its pattern: readOnlyGuard reads

@@ -1740,7 +1740,12 @@ A Responses client may send only its new input with `previous_response_id`
 (kevinzhow on X: every turn sent the whole conversation again, images
 included). `previousResponse` in
 [`prev_response.go`](../../internal/gateway/prev_response.go) runs in
-`serveAgent` before anything else reads the body.
+`previousResponses` inside the authenticated caller admission, before
+`keyLimited` reserves a budget. `serveAgent` skips a body already prepared
+there. A known history is admitted before constructing its contiguous JSON;
+insufficient shared memory returns 503, and an expanded body past the single
+request limit returns 413. Budget reservations use its expanded size/model,
+not merely the client's small delta.
 
 - Every Responses reply magpie passes with status 200, not failed or
   cancelled, is kept by its id with the conversation it answered (input,

@@ -54,24 +54,28 @@ func TestRequestBodyTooLarge(t *testing.T) {
 }
 
 func TestRequestBodySocketTimeout(t *testing.T) {
-	s := New()
-	s.requestLimits.readTimeout = 40 * time.Millisecond
-	gw := httptest.NewServer(s.handle(provider.Chat))
-	defer gw.Close()
-	conn, err := net.Dial("tcp", strings.TrimPrefix(gw.URL, "http://"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(2 * time.Second))
-	fmt.Fprintf(conn, "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 20\r\n\r\n{")
-	res, err := http.ReadResponse(bufio.NewReader(conn), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer res.Body.Close()
-	if res.StatusCode != 408 {
-		t.Fatalf("slow body: status %d", res.StatusCode)
+	for _, path := range []string{"/v1/chat/completions", "/v1/responses"} {
+		t.Run(path, func(t *testing.T) {
+			s := New()
+			s.requestLimits.readTimeout = 40 * time.Millisecond
+			gw := httptest.NewServer(s.Handler())
+			defer gw.Close()
+			conn, err := net.Dial("tcp", strings.TrimPrefix(gw.URL, "http://"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			conn.SetDeadline(time.Now().Add(2 * time.Second))
+			fmt.Fprintf(conn, "POST %s HTTP/1.1\r\nHost: localhost\r\nContent-Length: 20\r\n\r\n{", path)
+			res, err := http.ReadResponse(bufio.NewReader(conn), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer res.Body.Close()
+			if res.StatusCode != 408 {
+				t.Fatalf("slow body: status %d", res.StatusCode)
+			}
+		})
 	}
 }
 

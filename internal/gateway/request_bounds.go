@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -150,6 +151,15 @@ type decodedRequestBody struct {
 
 func (b *decodedRequestBody) Close() error { return b.original.Close() }
 
+// keepRequestBody shares a prepared body with downstream readers and budgets.
+func keepRequestBody(r *http.Request, body []byte) {
+	r.Body = &decodedRequestBody{Reader: bytes.NewReader(body), data: body, original: r.Body}
+	r.ContentLength = int64(len(body))
+	r.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil }
+	r.Header.Set("Content-Length", strconv.Itoa(len(body)))
+	r.Header.Del("Content-Encoding")
+}
+
 // readBoundedRequestBody reads once, with decoded-size admission and limits.
 func readBoundedRequestBody(w http.ResponseWriter, r *http.Request, limits requestLimits) ([]byte, int, error) {
 	if limits.body <= 0 {
@@ -182,7 +192,7 @@ func readBoundedRequestBody(w http.ResponseWriter, r *http.Request, limits reque
 	// acquire room as their output buffer grows, before allocating it.
 	encoding := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Encoding")))
 	if (encoding == "" || encoding == "identity") && r.ContentLength > 0 {
-		if err := bodyRoom.take(r.Context(), r.ContentLength); err != nil {
+		if err := bodyRoom.take(bodyRoomContext(r.Context()), r.ContentLength); err != nil {
 			return reject(http.StatusServiceUnavailable, err)
 		}
 	}
@@ -218,7 +228,7 @@ func readBoundedRequestBody(w http.ResponseWriter, r *http.Request, limits reque
 	}
 	defer rd.Close()
 	// Limit decoded bytes as well.
-	body, err := readSizedRoom(io.LimitReader(rd, limits.body+1), declared, limits.body+1, func(n int64) error { return bodyRoom.grow(r.Context(), n) })
+	body, err := readSizedRoom(io.LimitReader(rd, limits.body+1), declared, limits.body+1, func(n int64) error { return bodyRoom.grow(bodyRoomContext(r.Context()), n) })
 	if int64(len(body)) > limits.body {
 		return reject(http.StatusRequestEntityTooLarge, overLimit(limits.body))
 	}

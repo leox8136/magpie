@@ -44,6 +44,17 @@ type bodyWaiter struct {
 	in  chan struct{} // closed when let in
 }
 
+// A socket frame's room follows it through request-context authentication and
+// history expansion; those derived contexts must not charge the same bytes twice.
+type bodyRoomKey struct{}
+
+func bodyRoomContext(ctx context.Context) context.Context {
+	if held, ok := ctx.Value(bodyRoomKey{}).(context.Context); ok {
+		return held
+	}
+	return ctx
+}
+
 var bodyRoom = &bodyRoomT{}
 
 // A growing decoder cannot queue holding its partial output: another growing

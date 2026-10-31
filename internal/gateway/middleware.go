@@ -29,6 +29,9 @@ func (s *Server) serveAgent(w http.ResponseWriter, r *http.Request, from provide
 	// conversation whole before anything reads it (prev_response.go)
 	w, r, body, kept := previousResponse(w, r, from, body)
 	defer kept()
+	if r == nil {
+		return
+	}
 	w, recorded := recordConversation(w, r, from, body)
 	defer recorded()
 	// a conversation going round one tool call is answered here, before

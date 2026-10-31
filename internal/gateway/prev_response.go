@@ -210,12 +210,56 @@ func noteAnswered(r *http.Request, route string) {
 	}
 }
 
+// preparedPrevious prevents a second expansion in serveAgent, which also has
+// callers outside Handler. Expansion precedes the key's budget reservation.
+type preparedPrevious struct{}
+
+func (s *Server) previousResponses(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/responses") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		body, status, err := readBoundedRequestBody(w, r, s.requestLimits)
+		if err != nil {
+			writeError(w, provider.Responses, status, err.Error())
+			return
+		}
+		w, r, body, done := previousResponse(w, r, provider.Responses, body)
+		defer done()
+		if r == nil {
+			return
+		}
+		r = r.WithContext(context.WithValue(r.Context(), preparedPrevious{}, true))
+		keepRequestBody(r, body)
+		next.ServeHTTP(w, r)
+	})
+}
+
+// Admit the whole conversation before making its contiguous copy. The original
+// body and each raw item bound the compact JSON written by marshalPlain.
+func admitConversation(w http.ResponseWriter, r *http.Request, body []byte, oldInput int, input []json.RawMessage) bool {
+	n := int64(len(body)-oldInput+max(0, len(input)-1)) + 2
+	for _, item := range input {
+		n += int64(len(item))
+	}
+	if n > defaultBodyLimit {
+		writeError(w, provider.Responses, http.StatusRequestEntityTooLarge, overLimit(defaultBodyLimit).Error())
+		return false
+	}
+	if err := bodyRoom.grow(bodyRoomContext(r.Context()), n); err != nil {
+		writeError(w, provider.Responses, http.StatusServiceUnavailable, err.Error())
+		return false
+	}
+	return true
+}
+
 // previousResponse gives a Responses request that names a response magpie
 // holds the conversation whole, and keeps the reply for the next turn.
 // Its done is deferred by the caller.
 func previousResponse(w http.ResponseWriter, r *http.Request, from provider.Protocol, body []byte) (http.ResponseWriter, *http.Request, []byte, func()) {
 	nothing := func() {}
-	if from != provider.Responses {
+	if from != provider.Responses || r.Context().Value(preparedPrevious{}) != nil {
 		return w, r, body, nothing
 	}
 	var q map[string]json.RawMessage
@@ -243,10 +287,13 @@ func previousResponse(w http.ResponseWriter, r *http.Request, from provider.Prot
 	}
 	if ask.known {
 		input = append(prior[:len(prior):len(prior)], fresh...)
-		if b, err := json.Marshal(input); err == nil {
+		if !admitConversation(w, r, body, len(q["input"]), input) {
+			return w, nil, nil, nothing
+		}
+		if b, err := marshalPlain(input); err == nil {
 			q["input"] = b
 			delete(q, "previous_response_id")
-			if nb, err := json.Marshal(q); err == nil {
+			if nb, err := marshalPlain(q); err == nil {
 				body = nb
 			}
 		}
