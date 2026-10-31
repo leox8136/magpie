@@ -277,7 +277,11 @@ func identityOf(k Key, keys []Key, now time.Time) (Identity, error) {
 			return Identity{}, &Refused{Why: fmt.Sprintf("the gateway key %q may use none of its models now: the key it was issued under no longer lets it", k.Name)}
 		}
 	}
-	who.Accounts = foldAccounts(who.Accounts, p.Accounts)
+	var shared bool
+	who.Accounts, shared = foldAccounts(who.Accounts, p.Accounts)
+	if !shared {
+		return Identity{}, &Refused{Why: fmt.Sprintf("the gateway key %q shares none of its explicitly allowed accounts with its issuer", k.Name)}
+	}
 	who.ReadOnly = who.ReadOnly || p.ReadOnly
 	who.Quotas = who.Quotas && p.Quotas
 	if !p.Expires.IsZero() && (who.Expires.IsZero() || p.Expires.Before(who.Expires)) {
@@ -322,10 +326,11 @@ func foldModels(child, issuer []string) []string {
 
 // foldAccounts holds a child to the issuer's accounts too: of each
 // provider the issuer names accounts of, the child's own of them that the
-// issuer has, else the issuer's; the child's of other providers as given.
-func foldAccounts(child, issuer []string) []string {
+// issuer has, or the issuer's when the child names none for that provider.
+// An explicit restriction with no overlap refuses authentication.
+func foldAccounts(child, issuer []string) ([]string, bool) {
 	if len(issuer) == 0 {
-		return child
+		return child, true
 	}
 	byProvider := func(as []string) map[string][]string {
 		m := map[string][]string{}
@@ -350,10 +355,13 @@ func foldAccounts(child, issuer []string) []string {
 			return slices.ContainsFunc(ps[p], func(y string) bool { return strings.EqualFold(x, y) })
 		})
 		if !mine {
+			if len(cs[p]) > 0 {
+				return nil, false
+			}
 			out = append(out, a)
 		}
 	}
-	return out
+	return out, true
 }
 
 // allowsEntry: the account entry "<provider>/<ref>" is one who may use.

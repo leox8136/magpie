@@ -797,7 +797,8 @@ use. Then at every authentication (`access.Check`, which `Authenticate`,
 `access.On` and so every route reach) `identityOf` folds it into its issuer
 as the issuer is now: its models are those both allow (`foldModels`; none
 in common is a refusal), its accounts are held to the issuer's
-(`foldAccounts`), it is read-only if either is, told quotas only if both
+(`foldAccounts`; an explicitly restricted provider with no accounts in common
+refuses authentication, rather than granting the issuer's other accounts), it is read-only if either is, told quotas only if both
 are, and it expires when the first of them does. An issuer removed, turned
 off or expired refuses it. What it spends counts against the issuer's
 limits too: its usage rows carry `callerIssuerId` (`usage.Record.
