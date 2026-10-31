@@ -815,7 +815,10 @@ when the key expires (a Responses WebSocket) is refused at its next turn is
 untested. An expired key is kept an hour for
 that message, then `access.Prune` removes it (every 10 minutes while the
 gateway serves, and on each issue), with the keys of an issuer that is
-gone. A turned-off key on loopback is unchanged: it reads as no key.
+gone. A supplied managed key (`sk-magpie-key-`) that is disabled, removed,
+pruned or unknown still gets 401 on loopback; it never falls back to the
+unrestricted no-key caller. Keyless local agents and their `magpie-*` tokens
+retain their existing behavior.
 
 `TestIssuedKeyExpiresOnEveryRoute`, `TestKeysEndpointWhoMayIssue` and
 `TestIssuedKeysSpendTheirIssuersLimit` in
@@ -1688,7 +1691,10 @@ serves it on `/v1/responses`, `/responses` and the Codex backend's
   the allow list, `rebound`, the key, `corsGuard`, `keyLimited`, routing,
   failover, usage and the log judge every turn as an HTTP one: a key
   turned off or past its limit refuses the next turn
-  (`TestResponsesSocketGuards`). The upgrade itself passed those too, and
+  (`TestResponsesSocketGuards`). Every failed remote authentication, including
+  an unknown, expired or revoked managed key, passes the shared failure
+  throttle before its 401 explanation. Local managed-key failures stay 401
+  and never fall back to trusted loopback. The upgrade itself passed those too, and
   coder/websocket's `Accept` refuses a browser Origin whose host isn't the
   `Host`. `holdCatalog` holds each turn, not the socket.
 - The reply's events go back a text frame each; the reply's headers as
