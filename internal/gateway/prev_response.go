@@ -112,6 +112,15 @@ func (s *prevStore) put(t *prevTurn) {
 	}
 }
 
+// remove releases a socket's entry when it no longer names that response.
+func (s *prevStore) remove(k prevKey) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if e := s.m[k]; e != nil {
+		s.drop(e)
+	}
+}
+
 func (s *prevStore) drop(e *list.Element) {
 	t := e.Value.(*prevTurn)
 	s.order.Remove(e)

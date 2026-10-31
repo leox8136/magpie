@@ -1712,8 +1712,14 @@ serves it on `/v1/responses`, `/responses` and the Codex backend's
   or account other than the last one's sees what it would over HTTP. An id
   the socket doesn't hold, from another socket, or a failed reply's, is
   answered `previous_response_not_found`, on which Codex opens a new socket
-  and sends everything. `prevResponses` isn't used: Codex says `store:
-  false`.
+  and sends everything. Although Codex says `store: false`, socket history
+  uses `prevResponses` under a unique socket scope, sharing HTTP's 256 MiB
+  total cap and six-hour TTL. Each entry charges its whole ancestry and is
+  at most half the cap. New input is copied out of the receive buffer, so
+  unrelated fields cannot stay alive through a small input slice; inherited
+  items are shared. Only the cache owns these items, while a socket holds
+  at most two keys and removes them on disconnect. Evicted or oversized
+  histories get the same not-found response; a completed turn still succeeds.
 - `generate: false` (Codex's warmup) is answered locally with a
   `response.created` and `response.completed` of its own id; nothing is
   sent upstream. It first passes the same per-turn identity, read-only,
@@ -1767,7 +1773,8 @@ not merely the client's small delta.
   request with `store: false` keeps nothing. Codex over HTTP sends
   `store: false` with the whole input and never names a previous response
   (only its websocket request has the field), so nothing changes for it.
-  On a WebSocket it names one, which the socket keeps itself (below).
+  On a WebSocket it names one, kept in a private socket scope of the same
+  bounded cache (see the WebSocket section above).
 - A turn is kept for the caller that made it (`prevScope`): its gateway
   key, the remote magpie it came through, and the address of a keyless
   remote caller. Another caller naming the id is told it isn't there.

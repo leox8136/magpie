@@ -39,10 +39,10 @@ import (
 // HTTP one, and a key turned off ends the next turn, not the socket.
 //
 // The conversation a turn continues is the socket's own: each reply's
-// input and output, kept for the socket's life (Codex says store false on
-// every request, and OpenAI's socket keeps the last response for the
-// connection all the same). A turn naming one is given the conversation
-// whole before it is sent, so what serves it, a provider or another
+// input and output, kept in the bounded history cache for the socket's life
+// (Codex says store false on every request, and OpenAI's socket keeps the
+// last response for the connection all the same). A turn naming one is
+// given the conversation whole before it is sent, so a provider or another
 // account, sees what it would over HTTP. An id the socket doesn't hold
 // is answered previous_response_not_found, on which Codex opens a new
 // socket and sends the conversation whole.
@@ -152,13 +152,6 @@ func (cs *clientSockets) drain(ctx context.Context) {
 	}
 }
 
-// heldTurn is one reply a socket holds: the conversation up to and
-// with it.
-type heldTurn struct {
-	id    string
-	items []json.RawMessage
-}
-
 type responsesSocket struct {
 	s    *Server
 	o    *socketOrigin
@@ -168,7 +161,8 @@ type responsesSocket struct {
 	live context.Context // the socket's, for writes (send)
 
 	writeMu sync.Mutex
-	turns   []heldTurn // the newest last
+	turns   []prevKey // the newest last; only the bounded cache owns the items
+	scope   string
 
 	mu      sync.Mutex
 	away    bool // the gateway is ending: close after this turn
@@ -235,6 +229,7 @@ func (rs *responsesSocket) serve() {
 	ctx, cancel := context.WithCancel(rs.ctx)
 	defer cancel()
 	defer rs.c.CloseNow()
+	defer rs.forget()
 	rs.live = ctx
 	in := make(chan socketMsg)
 	readerDone := make(chan struct{})
@@ -447,19 +442,66 @@ func (t *socketTurnRun) interrupt(id string) bool {
 
 // held is the conversation a reply the socket holds ends.
 func (rs *responsesSocket) held(id string) ([]json.RawMessage, bool) {
-	for i := len(rs.turns) - 1; i >= 0; i-- {
-		if rs.turns[i].id == id {
-			return rs.turns[i].items, true
+	for _, key := range rs.turns {
+		if key.id == id {
+			if t, ok := prevResponses.get(key); ok {
+				return t.items, true
+			}
+			break
 		}
 	}
 	return nil, false
 }
 
-func (rs *responsesSocket) keep(t heldTurn) {
-	rs.turns = append(rs.turns, t)
-	if len(rs.turns) > socketKeep {
-		rs.turns = append(rs.turns[:0:0], rs.turns[len(rs.turns)-socketKeep:]...)
+// keep detaches new input from its frame: a tiny input may otherwise keep
+// megabytes of unrelated fields alive. Ancestors already belong to the cache.
+// Charge the whole conversation on every entry, since evicting its ancestor
+// must not release the charge for bytes this entry still holds.
+func (rs *responsesSocket) keep(id string, input []json.RawMessage, fresh int, output []json.RawMessage) {
+	// A provider may reuse an id; replace it without leaving two handles
+	// whose later eviction could remove the new value.
+	for i, key := range rs.turns {
+		if key.id == id {
+			prevResponses.remove(key)
+			rs.turns = append(rs.turns[:i], rs.turns[i+1:]...)
+			break
+		}
 	}
+	// Include the slice headers and entry metadata as well as the JSON bytes.
+	own := 256 + len(id) + 24*(len(input)+len(output))
+	for _, item := range input {
+		own += cap(item)
+	}
+	for _, item := range output {
+		own += cap(item)
+	}
+	if own > prevResponses.cap/2 {
+		return
+	}
+	if rs.scope == "" {
+		rs.scope = "socket:" + newID()
+	}
+	items := make([]json.RawMessage, 0, len(input)+len(output))
+	items = append(items, input...)
+	for i := len(input) - fresh; i < len(input); i++ {
+		items[i] = make(json.RawMessage, len(input[i]))
+		copy(items[i], input[i])
+	}
+	items = append(items, output...)
+	key := prevKey{scope: rs.scope, id: id}
+	prevResponses.put(&prevTurn{key: key, items: items, own: own})
+	rs.turns = append(rs.turns, key)
+	if len(rs.turns) > socketKeep {
+		prevResponses.remove(rs.turns[0])
+		rs.turns = rs.turns[1:]
+	}
+}
+
+func (rs *responsesSocket) forget() {
+	for _, key := range rs.turns {
+		prevResponses.remove(key)
+	}
+	rs.turns = nil
 }
 
 type socketDispatchKey struct{}
@@ -545,7 +587,7 @@ func (rs *responsesSocket) serveTurn(ctx context.Context, t *socketTurnRun, fram
 		resp["usage"] = map[string]any{"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
 		b, _ = json.Marshal(map[string]any{"type": "response.completed", "response": resp})
 		if rs.write(ctx, b) == nil {
-			rs.keep(heldTurn{id: id, items: input})
+			rs.keep(id, input, len(fresh), nil)
 		}
 		return
 	}
@@ -579,7 +621,7 @@ func (rs *responsesSocket) serveTurn(ctx context.Context, t *socketTurnRun, fram
 		return
 	}
 	if out.id != "" && out.completed {
-		rs.keep(heldTurn{id: out.id, items: append(input[:len(input):len(input)], out.items...)})
+		rs.keep(out.id, input, len(fresh), out.items)
 	}
 }
 
