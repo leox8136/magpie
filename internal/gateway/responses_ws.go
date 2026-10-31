@@ -237,7 +237,8 @@ func (rs *responsesSocket) serve() {
 	go func() {
 		defer close(readerDone)
 		for {
-			typ, rd, err := rs.c.Reader(ctx)
+			readCtx, readCancel := context.WithCancel(ctx)
+			typ, rd, err := rs.c.Reader(readCtx)
 			frameCtx, stop := context.WithCancel(ctx)
 			release := func() { stop(); bodyRoom.give(frameCtx) }
 			var data []byte
@@ -246,9 +247,15 @@ func (rs *responsesSocket) serve() {
 				rs.c.Close(websocket.StatusUnsupportedData, "text frames only")
 			}
 			if err == nil {
-				data, err = readSizedRoom(rd, -1, defaultBodyLimit+1, func(n int64) error {
+				timeout := rs.s.requestLimits.readTimeout
+				if timeout <= 0 {
+					timeout = defaultBodyTimeout
+				}
+				idle := newSocketIdleReader(rd, timeout, readCancel)
+				data, err = readSizedRoom(idle, -1, defaultBodyLimit+1, func(n int64) error {
 					return bodyRoom.grow(frameCtx, n)
 				})
+				idle.stop()
 				if err != nil {
 					var full *bodyGrowthFull
 					if errors.As(err, &full) {
@@ -256,6 +263,7 @@ func (rs *responsesSocket) serve() {
 					}
 				}
 			}
+			readCancel()
 			select {
 			case in <- socketMsg{data: data, err: err, ctx: frameCtx, release: release}:
 			case <-ctx.Done():
@@ -502,6 +510,56 @@ func (rs *responsesSocket) forget() {
 		prevResponses.remove(key)
 	}
 	rs.turns = nil
+}
+
+// socketIdleReader bounds a message's upload, not the quiet time between
+// messages. Its timer and progress share a lock so a late timer callback
+// cannot cancel a read that has already renewed the deadline or finished.
+type socketIdleReader struct {
+	io.Reader
+	mu      sync.Mutex
+	timer   *time.Timer
+	last    time.Time
+	timeout time.Duration
+	cancel  context.CancelFunc
+	stopped bool
+}
+
+func newSocketIdleReader(r io.Reader, timeout time.Duration, cancel context.CancelFunc) *socketIdleReader {
+	idle := &socketIdleReader{Reader: r, last: time.Now(), timeout: timeout, cancel: cancel}
+	idle.mu.Lock()
+	idle.timer = time.AfterFunc(timeout, func() {
+		idle.mu.Lock()
+		defer idle.mu.Unlock()
+		if idle.stopped {
+			return
+		}
+		if remaining := idle.timeout - time.Since(idle.last); remaining > 0 {
+			idle.timer.Reset(remaining)
+		} else {
+			idle.stopped = true
+			idle.cancel()
+		}
+	})
+	idle.mu.Unlock()
+	return idle
+}
+
+func (r *socketIdleReader) Read(b []byte) (int, error) {
+	n, err := r.Reader.Read(b)
+	if n > 0 {
+		r.mu.Lock()
+		r.last = time.Now()
+		r.mu.Unlock()
+	}
+	return n, err
+}
+
+func (r *socketIdleReader) stop() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.stopped = true
+	r.timer.Stop()
 }
 
 type socketDispatchKey struct{}

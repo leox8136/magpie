@@ -4,13 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/yetone/magpie/internal/access"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/coder/websocket"
+	"github.com/yetone/magpie/internal/access"
 )
 
+// All failed remote credentials use one bucket, including a forged managed
+// key. Locally the same key must still fail closed, rather than gain trust.
 func TestManagedKeyFailureThrottle(t *testing.T) {
 	fresh(t)
 	t.Setenv("MAGPIE_ADDR", "")
@@ -82,6 +86,9 @@ func TestSocketHistoryOwnership(t *testing.T) {
 	}
 }
 
+// History has one global bound shared with HTTP, while handles are private
+// to a socket. Eviction and oversize retention fail as unknown history so a
+// client can resend the conversation; they do not invalidate its warmup.
 func TestSocketHistoryGlobalBound(t *testing.T) {
 	fresh(t)
 	old := prevResponses
@@ -148,5 +155,109 @@ func TestSocketHistoryGlobalBound(t *testing.T) {
 	prevResponses.mu.Unlock()
 	if size != 0 {
 		t.Fatalf("closed sockets retained %d bytes", size)
+	}
+}
+
+func TestSocketPartialFrameReleasesAdmission(t *testing.T) {
+	fresh(t)
+	old := bodyRoom
+	room := &bodyRoomT{room: 2 << 20, sized: true}
+	bodyRoom = room
+	t.Cleanup(func() { bodyRoom = old })
+	s, ts := sockServer(t)
+	s.requestLimits.readTimeout = 500 * time.Millisecond
+	c, _, err := dialSock(t, ts, "/v1/responses", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	w, err := c.c.Writer(ctx, websocket.MessageText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte(`{"input":"` + strings.Repeat("x", 1<<20))); err != nil {
+		t.Fatal(err)
+	}
+	// Observe admission before waiting for release: an upload that never
+	// reached the reader cannot prove the timeout releases anything.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		room.mu.Lock()
+		held := room.held
+		room.mu.Unlock()
+		if held >= 1<<20 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("partial frame did not acquire admission")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	for {
+		room.mu.Lock()
+		held := room.held
+		room.mu.Unlock()
+		if held == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("stalled frame still holds %d bytes", held)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// A separate large HTTP request can now acquire the same capacity.
+	up := &respUp{}
+	sockUp(t, up)
+	r := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"fake/m1","store":false,"input":"`+strings.Repeat("x", 2<<20)+`"}`)).WithContext(ctx)
+	r.RemoteAddr = "127.0.0.1:1234"
+	reply := httptest.NewRecorder()
+	s.Front().ServeHTTP(reply, r)
+	if reply.Code != 200 || up.calls() != 1 {
+		t.Fatalf("unrelated HTTP request: %d (upstream calls %d)", reply.Code, up.calls())
+	}
+	if _, _, err := c.c.Read(ctx); err == nil {
+		t.Fatal("timed-out upload left its connection open")
+	}
+}
+
+func TestSocketIdleAndProgressingUpload(t *testing.T) {
+	fresh(t)
+	s, ts := sockServer(t)
+	s.requestLimits.readTimeout = 500 * time.Millisecond
+	c, _, err := dialSock(t, ts, "/v1/responses", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Quiet between messages is allowed. Progress is every 100ms (fivefold
+	// margin), and the whole upload lasts longer than one timeout.
+	time.Sleep(2 * s.requestLimits.readTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	w, err := c.c.Writer(ctx, websocket.MessageText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte(`{"type":"response.create","generate":false,"input":"`)); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 8; i++ {
+		if _, err := w.Write([]byte(strings.Repeat("x", 64<<10))); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if _, err := w.Write([]byte(`"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	frames, err := c.until("response.completed", "error")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frames[len(frames)-1].Get("type").String() != "response.completed" {
+		t.Fatal(frames)
 	}
 }

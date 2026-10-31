@@ -1736,7 +1736,11 @@ serves it on `/v1/responses`, `/responses` and the Codex backend's
   `bodyRoom` capacity before buffer growth. No room gives 503 and closes the
   receive; interrupt frames remain small and readable. History expansion also
   acquires room before constructing the whole request, and budgets see that
-  expanded body.
+  expanded body. Once a message starts, its reads use `requestLimits.readTimeout`
+  (60 seconds by default), renewed on progress. A stalled upload closes the
+  connection and releases its admission; waiting between messages has no
+  such deadline (`TestSocketPartialFrameReleasesAdmission`,
+  `TestSocketIdleAndProgressingUpload`).
 - An upstream cut the gateway tells as `response.failed` goes back as
   that frame, and the reply isn't kept; a stream that still ends with no
   terminal event closes the socket 1011, as an HTTP stream would be cut
