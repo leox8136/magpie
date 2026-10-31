@@ -3,6 +3,8 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"github.com/coder/websocket"
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/provider"
 	"io"
@@ -115,5 +117,123 @@ func TestPreviousHistoryReservation(t *testing.T) {
 	}
 	if status != 429 {
 		t.Fatalf("2MiB history in flight with token cap1000 did not reserve its input: second request status=%d upstream=%d", status, up.calls())
+	}
+}
+
+func TestSocketQueueLimit(t *testing.T) {
+	fresh(t)
+	keys, secrets := newCaller(t, "tenant")
+	if _, err := access.Update("concurrency-key", access.Change{Key: keys[0].ID, Concurrency: &access.Concurrency{MaxConcurrency: 1, QueueLimit: 0}}); err != nil {
+		t.Fatal(err)
+	}
+	started, release := make(chan struct{}), make(chan struct{})
+	u := &respUp{reply: func(w http.ResponseWriter, r *http.Request, n int) {
+		if n == 1 {
+			close(started)
+			select {
+			case <-release:
+			case <-r.Context().Done():
+				return
+			}
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r%d\",\"object\":\"response\",\"status\":\"completed\",\"output\":[]}}\n\n", n)
+	}}
+	sockUp(t, u)
+	_, ts := sockServer(t)
+	c, _, err := dialSock(t, ts, "/v1/responses", http.Header{"Authorization": {"Bearer " + secrets[0]}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame := `{"type":"response.create","model":"fake/m1","input":"hi","store":false}`
+	c.send(frame)
+	<-started
+	c.send(frame)
+	c.send(`{"type":"response.interrupt","response_id":"not-active"}`)
+	frames, err := c.until("response.interrupt.failed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejected := false
+	for _, f := range frames {
+		if f.Get("type").String() == "error" && f.Get("status").Int() == 429 {
+			rejected = true
+		}
+	}
+	if !rejected {
+		close(release)
+		t.Fatal("QueueLimit=0 did not reject the queued turn")
+	}
+	close(release)
+	if _, err := c.until("response.completed"); err != nil {
+		t.Fatal(err)
+	}
+	if u.calls() != 1 {
+		t.Fatalf("QueueLimit=0 nevertheless admitted %d turns", u.calls())
+	}
+}
+
+func TestSocketFrameMemoryAdmission(t *testing.T) {
+	fresh(t)
+	old := bodyRoom
+	room := &bodyRoomT{room: 2 << 20, sized: true}
+	bodyRoom = room
+	t.Cleanup(func() { bodyRoom = old })
+	busy, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := room.take(busy, 2<<20); err != nil {
+		t.Fatal(err)
+	}
+	server, ts := sockServer(t)
+	c, _, err := dialSock(t, ts, "/v1/responses", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Refusal can close the receive before the client finishes uploading;
+	// either the 503 frame or that connection failure is observable.
+	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop()
+	_ = c.c.Write(ctx, websocket.MessageText, []byte(`{"type":"response.create","model":"fake/m1","generate":false,"input":"`+strings.Repeat("x", 2<<20)+`"}`))
+	frames, readErr := c.until("error", "response.completed")
+	if readErr == nil && (len(frames) == 0 || frames[len(frames)-1].Get("status").Int() != 503) {
+		t.Fatalf("full room admitted a warmup: %v", frames)
+	}
+	c.c.CloseNow()
+	server.sockets.drain(ctx)
+	room.mu.Lock()
+	held := room.held
+	room.mu.Unlock()
+	if held != 2<<20 {
+		t.Fatalf("rejected socket retained memory: %d", held)
+	}
+}
+
+func TestSocketCompletedStreamStillReadsControls(t *testing.T) {
+	fresh(t)
+	gone := make(chan struct{})
+	u := &respUp{reply: func(w http.ResponseWriter, r *http.Request, _ int) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"finished\",\"object\":\"response\",\"status\":\"completed\",\"output\":[]}}\n\n")
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+		close(gone)
+	}}
+	sockUp(t, u)
+	_, ts := sockServer(t)
+	c, _, err := dialSock(t, ts, "/v1/responses", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.turn(create("", userHi))
+	c.send(create("", userHi))
+	c.send(`{"type":"response.interrupt","response_id":"another"}`)
+	if _, err := c.until("response.interrupt.failed"); err != nil {
+		t.Fatal(err)
+	}
+	c.c.CloseNow()
+	select {
+	case <-gone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("completed upstream outlived the disconnected client")
 	}
 }

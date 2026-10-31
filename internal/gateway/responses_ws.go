@@ -225,8 +225,10 @@ func (rs *responsesSocket) goingAway() {
 }
 
 type socketMsg struct {
-	data []byte
-	err  error
+	data    []byte
+	err     error
+	ctx     context.Context
+	release func()
 }
 
 func (rs *responsesSocket) serve() {
@@ -235,16 +237,34 @@ func (rs *responsesSocket) serve() {
 	defer rs.c.CloseNow()
 	rs.live = ctx
 	in := make(chan socketMsg)
+	readerDone := make(chan struct{})
+	defer func() { cancel(); rs.c.CloseNow(); <-readerDone }()
 	go func() {
+		defer close(readerDone)
 		for {
-			typ, data, err := rs.c.Read(ctx)
+			typ, rd, err := rs.c.Reader(ctx)
+			frameCtx, stop := context.WithCancel(ctx)
+			release := func() { stop(); bodyRoom.give(frameCtx) }
+			var data []byte
 			if err == nil && typ != websocket.MessageText {
 				err = errors.New("binary frame")
 				rs.c.Close(websocket.StatusUnsupportedData, "text frames only")
 			}
+			if err == nil {
+				data, err = readSizedRoom(rd, -1, defaultBodyLimit+1, func(n int64) error {
+					return bodyRoom.grow(frameCtx, n)
+				})
+				if err != nil {
+					var full *bodyGrowthFull
+					if errors.As(err, &full) {
+						rs.writeError(ctx, 503, "server_error", "body_memory_full", err.Error(), "")
+					}
+				}
+			}
 			select {
-			case in <- socketMsg{data, err}:
+			case in <- socketMsg{data: data, err: err, ctx: frameCtx, release: release}:
 			case <-ctx.Done():
+				release()
 				return
 			}
 			if err != nil {
@@ -252,11 +272,16 @@ func (rs *responsesSocket) serve() {
 			}
 		}
 	}()
-	var queued []socketMsg
+	var nextTurn *socketMsg
+	defer func() {
+		if nextTurn != nil {
+			nextTurn.release()
+		}
+	}()
 	for {
 		var m socketMsg
-		if len(queued) > 0 {
-			m, queued = queued[0], queued[1:]
+		if nextTurn != nil {
+			m, nextTurn = *nextTurn, nil
 		} else {
 			select {
 			case m = <-in:
@@ -265,16 +290,19 @@ func (rs *responsesSocket) serve() {
 			}
 		}
 		if m.err != nil {
+			m.release()
 			return
 		}
 		kind := gjson.GetBytes(m.data, "type").String()
 		switch kind {
 		case "response.create":
 		case "response.interrupt":
+			m.release()
 			// nothing in flight: it ended before the ask came
 			rs.write(ctx, interruptReply("response.interrupt.failed", gjson.GetBytes(m.data, "response_id").String()))
 			continue
 		default:
+			m.release()
 			rs.writeError(ctx, http.StatusBadRequest, "invalid_request_error", "unsupported_message",
 				fmt.Sprintf("magpie serves response.create on this socket, not %q", kind), "type")
 			continue
@@ -282,7 +310,7 @@ func (rs *responsesSocket) serve() {
 		rs.mu.Lock()
 		rs.turning = true
 		rs.mu.Unlock()
-		turnCtx, stop := context.WithCancel(ctx)
+		turnCtx, stop := context.WithCancel(context.WithValue(m.ctx, bodyRoomKey{}, m.ctx))
 		t := &socketTurnRun{}
 		done := make(chan struct{})
 		go func() {
@@ -295,16 +323,31 @@ func (rs *responsesSocket) serve() {
 				waiting = false
 			case n := <-in:
 				if n.err != nil {
+					n.release()
 					// the client went: what is in flight ends with it
 					stop()
 					<-done
+					m.release()
 					return
 				}
 				if gjson.GetBytes(n.data, "type").String() != "response.interrupt" {
-					queued = append(queued, n)
+					if t.replied() && nextTurn == nil {
+						// The client saw the terminal reply and started its next
+						// turn. Finish releasing the old turn's permits first.
+						nextTurn = &n
+						// Keep reading disconnects and interrupts while the
+						// completed upstream finishes closing its stream.
+						continue
+					}
+					// Socket history is sequential. Do not create a second queue
+					// outside callerLanes: its bounds are shared across sockets
+					// and HTTP requests, not multiplied by each connection.
+					n.release()
+					rs.writeError(ctx, 429, "rate_limit_error", "socket_busy", "a turn is already running on this socket; wait for it to finish before sending another", "")
 					continue
 				}
 				id := gjson.GetBytes(n.data, "response_id").String()
+				n.release()
 				if !t.interrupt(id) {
 					rs.write(ctx, interruptReply("response.interrupt.failed", id))
 					continue
@@ -323,6 +366,7 @@ func (rs *responsesSocket) serve() {
 			}
 		}
 		stop()
+		m.release()
 		rs.mu.Lock()
 		rs.turning = false
 		away := rs.away
@@ -374,6 +418,19 @@ type socketTurnRun struct {
 	ids       []string // the response ids it gave
 	cut       bool     // its reply ended before its end
 	cancelled bool
+	terminal  bool // a terminal reply is being sent to the client
+}
+
+func (t *socketTurnRun) endReply() {
+	t.mu.Lock()
+	t.terminal = true
+	t.mu.Unlock()
+}
+
+func (t *socketTurnRun) replied() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.terminal
 }
 
 func (t *socketTurnRun) interrupt(id string) bool {
@@ -411,11 +468,13 @@ func (rs *responsesSocket) turn(ctx context.Context, t *socketTurnRun, frame []b
 	rs.got += int64(len(frame))
 	var q map[string]json.RawMessage
 	if decodeJSONView(frame, &q) != nil {
+		t.endReply()
 		rs.writeError(ctx, http.StatusBadRequest, "invalid_request_error", "invalid_json", "response.create is not a JSON object", "")
 		return
 	}
 	_, fresh := prevInput(q["input"])
 	if fresh == nil {
+		t.endReply()
 		rs.writeError(ctx, http.StatusBadRequest, "invalid_request_error", "invalid_value", "input is neither text nor a list of items", "input")
 		return
 	}
@@ -426,6 +485,7 @@ func (rs *responsesSocket) turn(ctx context.Context, t *socketTurnRun, frame []b
 		prior, ok := rs.held(id)
 		if !ok {
 			// Codex opens a new socket and sends the conversation whole
+			t.endReply()
 			rs.writeError(ctx, http.StatusBadRequest, "invalid_request_error", "previous_response_not_found",
 				"Previous response with id '"+id+"' not found.", "previous_response_id")
 			return
@@ -449,6 +509,7 @@ func (rs *responsesSocket) turn(ctx context.Context, t *socketTurnRun, frame []b
 		if rs.write(ctx, b) != nil {
 			return
 		}
+		t.endReply()
 		resp["status"] = "completed"
 		resp["usage"] = map[string]any{"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
 		b, _ = json.Marshal(map[string]any{"type": "response.completed", "response": resp})
@@ -463,12 +524,14 @@ func (rs *responsesSocket) turn(ctx context.Context, t *socketTurnRun, frame []b
 	delete(q, "generate")
 	in, err := json.Marshal(input)
 	if err != nil {
+		t.endReply()
 		rs.writeError(ctx, http.StatusBadRequest, "invalid_request_error", "invalid_value", err.Error(), "input")
 		return
 	}
 	q["input"] = in
 	body, err := json.Marshal(q)
 	if err != nil {
+		t.endReply()
 		rs.writeError(ctx, http.StatusBadRequest, "invalid_request_error", "invalid_json", err.Error(), "")
 		return
 	}
@@ -529,7 +592,7 @@ func (rs *responsesSocket) request(ctx context.Context, body []byte) *http.Reque
 	if strings.EqualFold(gjson.GetBytes(body, `client_metadata.ws_request_header_x_openai_internal_codex_responses_lite`).String(), "true") {
 		req.Header.Set("X-OpenAI-Internal-Codex-Responses-Lite", "true")
 	}
-	req.Body = io.NopCloser(bytes.NewReader(body))
+	req.Body = &decodedRequestBody{Reader: bytes.NewReader(body), data: body, original: io.NopCloser(bytes.NewReader(nil))}
 	req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil }
 	req.ContentLength = int64(len(body))
 	req.Header.Set("Content-Length", strconv.Itoa(len(body)))
@@ -709,6 +772,9 @@ func (w *socketTurnWriter) event(data []byte) error {
 			}
 		}
 	}
+	if w.ended {
+		w.run.endReply()
+	}
 	return w.send(data)
 }
 
@@ -779,6 +845,7 @@ func (w *socketTurnWriter) finish() {
 // status, the error object and the headers it acts on (Retry-After, the
 // account's x-codex-* windows).
 func (w *socketTurnWriter) sendHTTPError() {
+	w.run.endReply()
 	w.ended = true
 	body := bytes.TrimSpace(w.buf.Bytes())
 	var e json.RawMessage

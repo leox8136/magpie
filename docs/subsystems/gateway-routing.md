@@ -1720,7 +1720,13 @@ serves it on `/v1/responses`, `/responses` and the Codex backend's
 - `response.interrupt` naming the reply in flight cancels its request and
   is answered `response.interrupt.accepted`, then an interrupted
   `response.incomplete`; one naming another reply, or none in flight,
-  `response.interrupt.failed`. Other frames during a turn wait for it.
+  `response.interrupt.failed`. A new request while a turn is running gets
+  429 (`socket_busy`): there is no additional per-socket waiting queue outside
+  the shared caller lanes. Once a terminal reply has been sent, the next frame
+  may arrive immediately; it waits only for that finished turn's cleanup.
+  Frames are read incrementally through `readSizedRoom`, acquiring shared
+  `bodyRoom` capacity before buffer growth. No room gives 503 and closes the
+  receive; interrupt frames remain small and readable.
 - An upstream cut the gateway tells as `response.failed` goes back as
   that frame, and the reply isn't kept; a stream that still ends with no
   terminal event closes the socket 1011, as an HTTP stream would be cut
