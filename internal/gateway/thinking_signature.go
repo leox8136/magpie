@@ -31,15 +31,16 @@ var thinkingType = []byte(`"thinking"`)
 // came an empty signature where it has none: a stream's content_block_start
 // lines, or a whole reply's content. A line that names no thinking, or that
 // has a signature already (Anthropic's), passes as it came; a whole reply
-// is processed block by block (wholeSignatures).
+// is processed block by block (wholeContent).
 type sigFieldTidy struct {
 	sse   bool
 	buf   []byte
-	whole wholeSignatures
+	whole wholeContent
 }
 
 func (t *sigFieldTidy) write(b []byte) []byte {
 	if !t.sse {
+		t.whole.signatures = true
 		return t.whole.write(b)
 	}
 	t.buf = append(t.buf, b...)

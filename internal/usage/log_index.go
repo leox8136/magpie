@@ -61,6 +61,8 @@ type logSnapshot struct {
 	// while a provider was being added, under its host, is that
 	// provider's after it is deleted too (probeChunk; cybercaius).
 	hosts map[string]string
+	// full is where the full blocks end, for log-v1.bin
+	full logFull
 }
 
 var logIndex struct {
@@ -85,7 +87,8 @@ var logAppends struct {
 func (s *logSnapshot) sawHost(r Record) {
 	h, _, _ := strings.Cut(r.Host, " as ") // a subscription's "host as user"
 	h = strings.ToLower(strings.TrimSpace(h))
-	if h == "" || r.Provider == "" || strings.EqualFold(r.Provider, h) || r.IsRejected() {
+	// an MCP tool call's host is its server's name, not a provider's
+	if h == "" || r.Provider == "" || strings.EqualFold(r.Provider, h) || r.IsRejected() || r.Source == SourceMCP {
 		return
 	}
 	if s.hosts == nil {
@@ -157,6 +160,24 @@ func readLogSnapshot() *logSnapshot {
 		next.keyProviders = maps.Clone(old.keyProviders)
 		next.probes = slices.Clip(old.probes) // appended to, never written in
 		next.hosts = maps.Clone(old.hosts)
+		next.full = old.full
+	} else if old == nil {
+		// a start: the blocks kept, and the lines after them
+		if d := logDiskRead(path, info.Size()); d != nil && resumeLogHash(sum, d.full.digest) {
+			next.full = d.full
+			next.off, next.first, next.firstOwn = d.full.off, d.full.first, d.full.firstOwn
+			next.blocks, next.probes = d.blocks, d.probes
+			rows := chunkRows{}
+			for _, block := range next.blocks {
+				next.callers = append(next.callers, blockCallers(rows.of(block)))
+			}
+			rows.release()
+			next.keyProviders, next.hosts = maps.Clone(d.full.keyProviders), maps.Clone(d.full.hosts)
+			logDiskKept(path, d.full.n)
+			if logDiskLoaded != nil {
+				logDiskLoaded(d.full.n)
+			}
+		}
 	}
 	logIndex.reads++
 	f, err := os.Open(path)
@@ -222,6 +243,8 @@ func readLogSnapshot() *logSnapshot {
 			next.blocks = append(next.blocks, tail.freeze())
 			tail = nil
 			clear(routes)
+			next.full = logFull{n: len(next.blocks), off: next.off, hash: fmt.Sprintf("%x", sum.Sum(nil)), digest: marshalLogHash(sum),
+				first: next.first, firstOwn: next.firstOwn, keyProviders: maps.Clone(next.keyProviders), hosts: maps.Clone(next.hosts)}
 		}
 	}
 	if tail != nil {
@@ -233,6 +256,7 @@ func readLogSnapshot() *logSnapshot {
 	if (!trusted || !settled) && next.hash != logRecordHash(path, next.off) {
 		next.hash, next.digest = "", nil
 		next.settled = false
+		next.full = logFull{}
 	}
 	logAppends.Lock()
 	// Preserve writes which arrived while this immutable snapshot was built.
@@ -250,6 +274,7 @@ func readLogSnapshot() *logSnapshot {
 	}
 	if next.readErr == nil && next.off == info.Size() && next.hash != "" {
 		logIndex.snapshot = next
+		logDiskWrite(next)
 	}
 	return next
 }
@@ -290,17 +315,24 @@ func (o routeRows) handedOn(c *rowChunk, r *Record) {
 // rows of its own, the Sessions, Usage and Routing pages' reads of the
 // log allocated ~800 MB of rows a minute while calls came in (#2278). A
 // record's strings are the block's own, not the buffer's.
-func (s *logSnapshot) visit(since time.Time, fn func(Record)) {
+func (s *logSnapshot) visit(since time.Time, fn func(Record)) { visitBlocks(s.blocks, since, fn) }
+
+// blockReader reads blocks as visit reads the log's.
+func blockReader(blocks []*rowChunk, since time.Time) func(func(Record)) {
+	return func(fn func(Record)) { visitBlocks(blocks, since, fn) }
+}
+
+func visitBlocks(blocks []*rowChunk, since time.Time, fn func(Record)) {
 	rows := chunkRows{}
 	defer rows.release()
-	for _, packed := range s.blocks {
+	for _, packed := range blocks {
 		if !since.IsZero() && packed.Latest.Before(since) {
 			continue
 		}
 		c := rows.of(packed)
 		for i := range c.Rows {
 			p := &c.Rows[i]
-			if !p.Time.Before(since) {
+			if !p.Time().Before(since) {
 				fn(c.row(i).Record)
 			}
 		}
@@ -406,7 +438,7 @@ type callerBlock struct {
 func blockCallers(c *rowChunk) callerBlock {
 	ids := make([]string, 0, len(c.Rows))
 	for i := range c.Rows {
-		ids = append(ids, c.Strings[c.text(&c.Rows[i], rowCallerKey)])
+		ids = append(ids, c.Strings[c.text(&c.Rows[i], rowCallerKey)], c.Strings[c.text(&c.Rows[i], rowCallerIssuer)])
 	}
 	slices.Sort(ids)
 	ids = slices.Compact(ids)
@@ -434,7 +466,7 @@ func (s *logSnapshot) visitKey(key string, since time.Time, fn func(Record)) {
 		c := rows.of(packed)
 		for j := range c.Rows {
 			p := &c.Rows[j]
-			if !p.Time.Before(since) && c.Strings[c.text(p, rowCallerKey)] == key {
+			if !p.Time().Before(since) && (c.Strings[c.text(p, rowCallerKey)] == key || key != "" && c.Strings[c.text(p, rowCallerIssuer)] == key) {
 				fn(c.row(j).Record)
 			}
 		}

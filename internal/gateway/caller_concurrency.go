@@ -16,6 +16,18 @@ import (
 func (s *Server) callerLimited(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		who := access.Caller(r.Context())
+		if who.Issuer != nil && who.Issuer.Concurrency != nil {
+			// Issued keys share the issuer's lane, so issuing more keys cannot
+			// bypass its concurrency cap. Acquire the parent before the child.
+			child := who
+			child.Issuer = nil
+			s.callerLimited(http.HandlerFunc(func(w http.ResponseWriter, parentRequest *http.Request) {
+				s.callerLimited(http.HandlerFunc(func(w http.ResponseWriter, admitted *http.Request) {
+					next.ServeHTTP(w, admitted.WithContext(access.WithIdentity(admitted.Context(), who)))
+				})).ServeHTTP(w, r.WithContext(access.WithIdentity(parentRequest.Context(), child)))
+			})).ServeHTTP(w, r.WithContext(access.WithIdentity(r.Context(), *who.Issuer)))
+			return
+		}
 		if who.KeyID == "" || who.Concurrency == nil || r.Method != http.MethodPost || r.URL.Path == accountingPath+"/retry" || strings.HasPrefix(r.URL.Path, "/_magpie/") {
 			next.ServeHTTP(w, r)
 			return

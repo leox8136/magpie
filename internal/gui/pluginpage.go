@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"cmp"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -70,7 +71,7 @@ type pluginPage struct {
 	Spec  string `json:"spec"`
 	Name  string `json:"name"`  // its package's
 	Key   string `json:"key"`   // the window's page key
-	Title string `json:"title"` // the page's, or the package's short name
+	Title string `json:"title"` // the page's, or the package's magpie.name or short name
 	// Titles are its title by the window's language (plugin.PageSpec)
 	Titles map[string]string `json:"titles,omitempty"`
 	URL    string            `json:"url"` // the page, under pluginPagePrefix
@@ -82,10 +83,16 @@ type pluginPage struct {
 	// Actions are its items in magpie's menus (plugin.ActionSpec); each
 	// opens this page
 	Actions []pluginAction `json:"actions,omitempty"`
+	// Service is where a browser reaches the page's local service
+	// (plugin.ServiceSpec) through this server, relative to the page's own
+	// address: only on a page served to a browser (servePageService)
+	Service string `json:"service,omitempty"`
 	token   string
 	dir     string
 	file    string // its HTML, relative to dir, with forward slashes
 	hosted  bool   // its plugin has a part for the host too (pageHost)
+	service *plugin.ServiceSpec
+	options map[string]any // its plugin's, as plugins.json keeps them
 }
 
 // pluginAction is an item a plugin's page adds to one of magpie's menus.
@@ -103,7 +110,7 @@ type pluginPanel struct {
 	Name   string            `json:"name"`  // its package's
 	Key    string            `json:"key"`   // the panel's, among every plugin's
 	Slot   string            `json:"slot"`  // the page it is in
-	Title  string            `json:"title"` // the panel's, or the package's short name
+	Title  string            `json:"title"` // the panel's, or the package's magpie.name or short name
 	Titles map[string]string `json:"titles,omitempty"`
 	URL    string            `json:"url"`   // the panel, under pluginPagePrefix
 	Reads  []string          `json:"reads"` // what it may read, of plugin.PageReads
@@ -150,9 +157,12 @@ func windowParts() (pages []pluginPage, panels []pluginPanel) {
 			tok := pageToken(e.Spec)
 			rel, _ := filepath.Rel(spec.Dir, spec.File)
 			p := pluginPage{Spec: e.Spec, Name: name, Key: key, Title: spec.Title, Titles: spec.Titles, Reads: reads, token: tok, dir: spec.Dir,
-				URL: pluginPagePrefix + tok + "/" + filepath.ToSlash(rel), file: filepath.ToSlash(rel), hosted: !only}
+				URL: pluginPagePrefix + tok + "/" + filepath.ToSlash(rel), file: filepath.ToSlash(rel), hosted: !only, options: e.Options}
+			if !only {
+				p.service = spec.Service
+			}
 			if p.Title == "" {
-				p.Title = plugin.ShortName(name)
+				p.Title = cmp.Or(plugin.InstalledName(e.Spec), plugin.ShortName(name))
 			}
 			if spec.Icon != "" {
 				p.Icon = pluginPagePrefix + tok + "/" + spec.Icon
@@ -177,7 +187,7 @@ func windowParts() (pages []pluginPage, panels []pluginPanel) {
 			p := pluginPanel{Spec: e.Spec, Name: name, Key: fmt.Sprintf("%s-%d", key, i), Slot: spec.Slot, Title: spec.Title, Titles: spec.Titles, Reads: reads,
 				token: tok, dir: spec.Dir, URL: pluginPagePrefix + tok + "/" + filepath.ToSlash(rel), file: filepath.ToSlash(rel), hosted: !only}
 			if p.Title == "" {
-				p.Title = plugin.ShortName(name)
+				p.Title = cmp.Or(plugin.InstalledName(e.Spec), plugin.ShortName(name))
 			}
 			panels = append(panels, p)
 		}
@@ -281,12 +291,9 @@ func pageHost(ctx context.Context) {
 	}
 }
 
-// servePluginPage serves a file of a plugin's page, by its token.
-func servePluginPage(rw http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		http.Error(rw, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+// servePluginPage serves a file of a plugin's page, by its token, and on
+// a page served to a browser (web) the page's local service too.
+func servePluginPage(rw http.ResponseWriter, r *http.Request, web bool) {
 	rest := strings.TrimPrefix(r.URL.Path, pluginPagePrefix)
 	tok, rel, ok := strings.Cut(rest, "/")
 	if !ok || len(tok) != 32 {
@@ -295,11 +302,26 @@ func servePluginPage(rw http.ResponseWriter, r *http.Request) {
 	}
 	// the page's or the panel's folder, by its token
 	dir, entry, hosted := "", "", false
+	var page *pluginPage
 	pages, panels := windowParts()
-	for _, p := range pages {
+	for i, p := range pages {
 		if hmac.Equal([]byte(p.token), []byte(tok)) {
 			dir, entry, hosted = p.dir, p.file, p.hosted
+			page = &pages[i]
 		}
+	}
+	// the service's paths are never a file of the page's
+	if strings.HasPrefix(rel, pageServicePath) {
+		if !web || page == nil || page.servicePort() == 0 {
+			http.NotFound(rw, r)
+			return
+		}
+		servePageService(rw, r, page, tok)
+		return
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(rw, "method not allowed", http.StatusMethodNotAllowed)
+		return
 	}
 	for _, p := range panels {
 		if hmac.Equal([]byte(p.token), []byte(tok)) {
@@ -368,8 +390,12 @@ func apiFramed(r *http.Request) bool {
 	return r.Header.Get("Sec-Fetch-Site") == "cross-site" && r.Header.Get("Sec-Fetch-Dest") != "document"
 }
 
-func pluginPageRoutes(mux *http.ServeMux) {
-	mux.HandleFunc(pluginPagePrefix, servePluginPage)
+// pluginPageRoutes are the routes of the plugins' pages and panels. web is
+// whether the window is a browser's (isWeb): only there is a page's local
+// service served through this server (servePageService), since only there
+// can 127.0.0.1 be another computer than this one.
+func pluginPageRoutes(mux *http.ServeMux, web bool) {
+	mux.HandleFunc(pluginPagePrefix, func(rw http.ResponseWriter, r *http.Request) { servePluginPage(rw, r, web) })
 	mux.HandleFunc("GET /api/plugin-pages", func(rw http.ResponseWriter, r *http.Request) {
 		out := pluginPages()
 		if out == nil {
@@ -379,6 +405,9 @@ func pluginPageRoutes(mux *http.ServeMux) {
 			out[i].URL = gateway.RequestBasePath(r) + out[i].URL
 			if out[i].Icon != "" {
 				out[i].Icon = gateway.RequestBasePath(r) + out[i].Icon
+			}
+			if web && out[i].servicePort() > 0 {
+				out[i].Service = strings.Repeat("../", strings.Count(out[i].file, "/")) + pageServicePath
 			}
 		}
 		writeJSON(rw, out)

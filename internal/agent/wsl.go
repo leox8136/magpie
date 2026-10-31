@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -275,6 +276,9 @@ type wslKind struct {
 	dir, bin string
 	in       func(place) *Agent // the agent at a place, as on this machine
 	restart  notice             // advice after a change, when mirrored; "" none
+	// restartAt, when set, is restart's choice at a place (kimi-cli or Kimi
+	// Code 2.x, told by the folder there)
+	restartAt func(place) notice
 	// version: the probe asks the distro's own bin its version (--version),
 	// for an agent whose config depends on it
 	version bool
@@ -365,7 +369,8 @@ var wslKinds = []wslKind{
 				return func(cur map[string]string) []Option {
 					return append(group("Claude Code", claudeOwn(cur["model"], nil, catalog.Provider("anthropic"))), claudeViaMagpie(false)...)
 				}
-			case "effort":
+			case "effort", "ultracode":
+				// their own options read only what was last seen
 				return nil
 			case "login":
 				// its sign-in, while the model last seen is magpie's
@@ -376,7 +381,18 @@ var wslKinds = []wslKind{
 					return claudeSignIns()
 				}
 			}
-			// a tier: magpie's models while the model last seen is one
+			// a tier's effort or the subagents': the levels of the model it
+			// was last seen on, as when running, not a model to pick
+			if tier, ok := strings.CutSuffix(key, "_effort"); ok {
+				return func(cur map[string]string) []Option {
+					if !isMagpie(cur["model"]) {
+						return nil
+					}
+					return static(tierEfforts(cmp.Or(cur[tier], cur["model"]))...)
+				}
+			}
+			// a tier, the subagents or auto mode: magpie's models while the
+			// model last seen is one
 			return func(cur map[string]string) []Option {
 				if !isMagpie(cur["model"]) {
 					return nil
@@ -397,7 +413,7 @@ var wslKinds = []wslKind{
 	// Kimi Code's ~/.kimi-code, or the old kimi-cli's ~/.kimi where that is
 	// all there is; a stopped distro's is looked at once it is started
 	{id: "kimi", name: "Kimi Code", dir: ".kimi-code", bin: "kimi", in: kimiIn,
-		restart: newNotice("{agent} in WSL {distro} reads its settings at start-up — restart open kimi sessions to use this."),
+		restart: noticeWSLKimiCode, restartAt: kimiWSLNotice,
 		asleep: func(key string) func(map[string]string) []Option {
 			if key != "model" {
 				return nil
@@ -712,6 +728,9 @@ func wslAgent(k wslKind, d distro) *Agent {
 	id := k.id + "@wsl:" + d.Name
 	at := d.place(id)
 	a := k.in(at)
+	if k.restartAt != nil {
+		k.restart = k.restartAt(at)
+	}
 	a.ID, a.Name, a.Aliases, a.Bin, a.UA, a.WSL = id, k.name+" · WSL "+d.Name, nil, "", nil, d.Name
 	a.wslVersion = at.version
 	a.Gateway = d.base
@@ -1283,6 +1302,20 @@ func wslRemember(name, key, v string) {
 	wsl.dirty = true
 }
 
+// WSLKeep has magpie remember v under key for the WSL distro name, in
+// wsl.json beside what its probe found, for while the distro is stopped:
+// what another package learnt of the distro's files while it ran (the
+// library's places for each agent there), which it can't read again then
+// without starting it (#3896). Nothing is kept for a distro never found.
+func WSLKeep(name, key, v string) {
+	wslRemember(name, key, v)
+	wslSave()
+}
+
+// WSLKept is what WSLKeep last kept under key for the distro; "" for
+// nothing.
+func WSLKept(name, key string) string { return wslLastSeen(name, key) }
+
 func wslLastSeen(name, key string) string {
 	wsl.Lock()
 	defer wsl.Unlock()
@@ -1319,7 +1352,7 @@ func wslReady(kind string) []distro {
 func wslClaudeStandIn(model string) string {
 	for _, d := range wslReady("claude") {
 		path := filepath.Join(d.local(d.Home), ".claude", "settings.json")
-		if m := claudeStandInAt(path, model, d.base()); m != "" {
+		if m := claudeStandInAt(d.place("claude@wsl:"+d.Name), path, model); m != "" {
 			return m
 		}
 	}

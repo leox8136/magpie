@@ -148,7 +148,7 @@ func TestGroupRelayBlipDoesNotEndOnSpentLast(t *testing.T) {
 			w.WriteHeader(429)
 		}},
 	} {
-		for _, blip := range []int{http.StatusServiceUnavailable, http.StatusTooManyRequests} {
+		for _, blip := range []int{503, 502, 429, 500} {
 			t.Run(x.name+" "+http.StatusText(blip), func(t *testing.T) {
 				codexSignedIn(t)
 				sticks.Lock()

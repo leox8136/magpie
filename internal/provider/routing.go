@@ -26,7 +26,9 @@ const (
 	LeastUsed = "usage"
 	Pace      = "pace"
 	// Weighted spreads a provider's requests over its keys by each key's
-	// weight (KeyAccount.Weight, #841), smoothly: 3 and 1 go a, a, b, a…
+	// weight (KeyAccount.Weight, #841), or a subscription's over its
+	// accounts by each account's (AccountWeights), smoothly: 3 and 1 go
+	// a, a, b, a…
 	Weighted = "weight"
 	// FreeFirst spends what costs nothing first: the models its vendor
 	// serves at no cost to the subscription's allowance or credits, before
@@ -36,6 +38,12 @@ const (
 	// lately — first token, then how fast it wrote — first; one not
 	// measured lately gets a turn now and then to be (routes.Fastest).
 	Fastest = "fast"
+	// Cheapest goes by price: the member whose model costs least at the
+	// request's time first — its vendor's peak hours and the provider's
+	// rate windows read then — those alike in their listed order
+	// (routes.Cheapest). A group's only: a provider's keys and accounts
+	// all bill its one price.
+	Cheapest = "cheap"
 )
 
 // pluginRouting is a routing a plugin serves: "<plugin>/<name>".
@@ -94,6 +102,18 @@ func SetCapCareful(id string, on bool) error {
 	return Save(*p)
 }
 
+// SetCountFree has every model of a provider count as free for the
+// routings that weigh it, or go by its vendor's word again
+// (Provider.CountFree).
+func SetCountFree(id string, on bool) error {
+	p, err := Find(id)
+	if err != nil {
+		return err
+	}
+	p.CountFree = on
+	return Save(*p)
+}
+
 // SetKeepLogin keeps Codex or Claude Code signed in to the account the
 // user made first (Provider.KeepLogin), or lets magpie move it on again.
 // Either way it is no longer kept on one of the user's choosing
@@ -106,7 +126,10 @@ func SetKeepLogin(id string, keep bool) error {
 	if p.Account == nil || p.Account.Agent != p.ID || !slices.Contains(switchedAgents, p.ID) {
 		return fmt.Errorf("magpie doesn't sign %s in to another of its accounts", p.Name)
 	}
-	chosen := p.KeepLogin && p.KeepLoginAs != ""
+	if keep && p.SwitchOnly {
+		return errSwitchOnly(*p)
+	}
+	chosen := p.keepsLogin() && p.KeepLoginAs != ""
 	p.KeepLogin, p.KeepLoginAs = keep, ""
 	if err := Save(*p); err != nil {
 		return err
@@ -117,15 +140,16 @@ func SetKeepLogin(id string, keep bool) error {
 	return nil
 }
 
-// SetSwitchOnly has magpie only move Codex's own sign-in between its
-// accounts (Provider.SwitchOnly), its requests never sent through the
-// gateway for account failover, or lets failover go through it again.
+// SetSwitchOnly has magpie only move Codex's or Claude Code's own sign-in
+// between its accounts (Provider.SwitchOnly): Codex's requests never sent
+// through the gateway for account failover, Claude's accounts serving no
+// request through the gateway (KeptToAgent). Off, both are as before.
 func SetSwitchOnly(id string, on bool) error {
 	p, err := Find(id)
 	if err != nil {
 		return err
 	}
-	if p.Account == nil || p.Account.Agent != p.ID || p.ID != "codex" {
+	if p.Account == nil || p.Account.Agent != p.ID || p.ID != "codex" && p.ID != "claude" {
 		return fmt.Errorf("magpie doesn't route %s's own requests for account failover", p.Name)
 	}
 	p.SwitchOnly = on
@@ -234,9 +258,21 @@ func (a Allowance) OnCredits() bool {
 	return false
 }
 
+// WeekUsedUp says whether the allowance's week, a window of a day or more
+// that counts every model, is used up at now, as its last reading says:
+// weekUsedUp's rule (AutoUseCodexReset) on an allowance, credits or none.
+func (a Allowance) WeekUsedUp(now time.Time) bool {
+	for _, l := range a {
+		if l.Span >= 24*time.Hour && l.Model == "" && l.matches == nil && l.Used >= 100 && l.Resets.After(now) {
+			return true
+		}
+	}
+	return false
+}
+
 // Restarts is when an auto-used reset starts the account's windows again,
 // as the Codex reset about to run out is spent (expiringResetSpent):
-// resetExpiryLead before it runs out, or now when the account is held up
+// resetLead before it runs out, or now when the account is held up
 // past then. What they have left then is lost, as at their own reset, so
 // Weekly pace and Smart take it for their renewal when it comes sooner
 // (#717, #718). Zero when none will be.

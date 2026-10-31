@@ -7,11 +7,12 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// wholeSignatures retains only an undecided content block. Once a complete
-// field proves it needs no repair, its remaining bytes pass through. Thinking
-// blocks without a signature remain buffered individually so field order and
-// null signatures can be repaired without emitting duplicate JSON keys.
-type wholeSignatures struct {
+// wholeContent repairs selected Messages content blocks. Ordinary text passes
+// through once its type is known; only an undecided block or one needing
+// repair is retained, preserving field order and unrelated JSON bytes.
+type wholeContent struct {
+	signatures     bool
+	numbers        bool
 	depth          int
 	quoted, escape bool
 	key            []byte
@@ -21,7 +22,7 @@ type wholeSignatures struct {
 	active, direct bool
 }
 
-func (s *wholeSignatures) write(b []byte) []byte {
+func (s *wholeContent) write(b []byte) []byte {
 	out := make([]byte, 0, len(b))
 	for i := 0; i < len(b); i++ {
 		// Text and tool arguments dominate large replies. Copy ordinary
@@ -88,7 +89,8 @@ func (s *wholeSignatures) write(b []byte) []byte {
 			if s.active && !s.direct && s.depth == s.array+1 {
 				typ := gjson.GetBytes(s.block, "type")
 				sig := gjson.GetBytes(s.block, "signature")
-				if typ.Type == gjson.String && (typ.Str != "thinking" || sig.Type == gjson.String) {
+				pass := !(s.signatures && typ.Str == "thinking" && sig.Type != gjson.String) && !(s.numbers && typ.Str == "tool_use")
+				if typ.Type == gjson.String && pass {
 					out = append(out, s.block...)
 					s.block = nil
 					s.direct = true
@@ -97,7 +99,14 @@ func (s *wholeSignatures) write(b []byte) []byte {
 		case '}':
 			if s.active && s.depth == s.array+1 {
 				if !s.direct {
-					if fixed, ok := unsignedThinking(s.block); ok {
+					var fixed []byte
+					var ok bool
+					if s.numbers && gjson.GetBytes(s.block, "type").Str == "tool_use" {
+						fixed, ok = integralToolInput(s.block)
+					} else if s.signatures {
+						fixed, ok = unsignedThinking(s.block)
+					}
+					if ok {
 						out = append(out, fixed...)
 					} else {
 						out = append(out, s.block...)
@@ -117,8 +126,29 @@ func (s *wholeSignatures) write(b []byte) []byte {
 	return out
 }
 
-func (s *wholeSignatures) flush() []byte {
+func (s *wholeContent) flush() []byte {
 	b := s.block
 	s.block = nil
 	return b // an incomplete block stays incomplete; never fabricate a reply
+}
+
+// Only a tool's input changes; surrounding JSON bytes and other blocks keep
+// their spelling, including large integers and escaped strings.
+func integralToolInput(block []byte) ([]byte, bool) {
+	if gjson.GetBytes(block, "type").Str != "tool_use" {
+		return nil, false
+	}
+	input := gjson.GetBytes(block, "input")
+	if !input.Exists() || input.Index <= 0 {
+		return nil, false
+	}
+	fixed := wholeArgs(input.Raw)
+	if fixed == input.Raw {
+		return nil, false
+	}
+	out := make([]byte, 0, len(block)-len(input.Raw)+len(fixed))
+	out = append(out, block[:input.Index]...)
+	out = append(out, fixed...)
+	out = append(out, block[input.Index+len(input.Raw):]...)
+	return out, true
 }

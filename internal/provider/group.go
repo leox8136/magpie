@@ -177,7 +177,15 @@ type Group struct {
 	Match []string `json:"match,omitempty"`
 	// Matched are the members the patterns match now, as Members has them
 	// after its own. Derived each time the group is read, never stored.
-	Matched  []string `json:"matched,omitempty"`
+	Matched []string `json:"matched,omitempty"`
+	// Placed is the order the user put the members in, those the
+	// patterns match among those it names (usrname1833 on Discord), as
+	// Members spells them. Read, the members follow it: a model matched
+	// since comes after them in the catalog's order, and one no longer
+	// matched drops out (placedIn). Empty when it is the order the group
+	// has unasked, its own members first, then the matched. Saved, it
+	// places the matched; the named go in Members' order (placedOver).
+	Placed   []string `json:"placed,omitempty"`
 	Routing  string   `json:"routing,omitempty"`  // as Provider.Routing, over all the members' keys and accounts; or Manual
 	Affinity string   `json:"affinity,omitempty"` // as Provider.Affinity
 	// Sink is Provider.Sink over the group's members' accounts and keys
@@ -399,7 +407,7 @@ func cloneGroups(gs []Group) []Group {
 	}
 	out := make([]Group, len(gs))
 	for i, g := range gs {
-		g.Members, g.Match, g.Matched = slices.Clone(g.Members), slices.Clone(g.Match), slices.Clone(g.Matched)
+		g.Members, g.Match, g.Matched, g.Placed = slices.Clone(g.Members), slices.Clone(g.Match), slices.Clone(g.Matched), slices.Clone(g.Placed)
 		g.Off, g.Levels, g.Fast = slices.Clone(g.Off), slices.Clone(g.Levels), slices.Clone(g.Fast)
 		g.Weights = maps.Clone(g.Weights)
 		if g.Rules != nil {
@@ -514,6 +522,7 @@ func (g Group) own() Group {
 	g.Members = slices.Clone(g.Members)
 	g.Match = slices.Clone(g.Match)
 	g.Matched = slices.Clone(g.Matched)
+	g.Placed = slices.Clone(g.Placed)
 	g.Off = slices.Clone(g.Off)
 	g.Levels = slices.Clone(g.Levels)
 	g.Fast = slices.Clone(g.Fast)
@@ -622,25 +631,45 @@ func mergeKey(pid, model string, same map[string]string) string {
 }
 
 // AutoStandIn is the model a request for a group magpie found goes to while
-// such groups are off (SetAutoGroups): its model, from the first provider
-// that serves it, as "provider/model". An agent set to the group, or a
-// session begun on it, keeps working, on one provider. ok is false for any
-// other id, a group the user has of that id, or while found groups are on.
+// such groups are off (SetAutoGroups), or once the providers the user keeps
+// out of them (SetAutoGroupSkip) took it away: its model, from the first
+// provider that serves it, one not kept out first, as "provider/model". An
+// agent set to the group, or a session begun on it, keeps working, on one
+// provider. ok is false for any other id, a group the user has of that id,
+// one they removed, and while found groups are on, one there is or that
+// isn't gone for a provider kept out.
 func AutoStandIn(id string) (string, bool) {
 	gid, ok := GroupIDOf(id)
-	if !ok || !strings.HasPrefix(gid, "auto-") || AutoGroupsOn() {
+	if !ok || !strings.HasPrefix(gid, "auto-") {
 		return "", false
 	}
+	f := load()
 	entries := providerEntries()
 	if _, ok := groupOf(groupsIn(entries), gid); ok {
 		return "", false
 	}
-	for _, e := range entries {
-		if AutoGroupOf(e.Provider.ID, e.Model) == gid {
-			return e.ID, true
+	if !f.NoAutoGroups {
+		if len(f.AutoGroupSkip) == 0 || slices.ContainsFunc(f.Groups, func(g Group) bool { return g.ID == gid }) {
+			return "", false // not gone for skipping: removed, or the user's
+		}
+		all := autoGroups(foundFrom(entries, heldOffEntries()), heldSettings().ModelSameAs)
+		if !slices.ContainsFunc(all, func(g Group) bool { return g.ID == gid }) {
+			return "", false
 		}
 	}
-	return "", false
+	var first string
+	for _, e := range entries {
+		if AutoGroupOf(e.Provider.ID, e.Model) != gid {
+			continue
+		}
+		if !slices.Contains(f.AutoGroupSkip, e.Provider.ID) {
+			return e.ID, true
+		}
+		if first == "" {
+			first = e.ID
+		}
+	}
+	return first, first != ""
 }
 
 // foundGroups are the groups magpie finds (autoGroups) among entries and
@@ -648,7 +677,45 @@ func AutoStandIn(id string) (string, bool) {
 // stays in the group, a member the gateway skips (membersIn), rather than
 // taking a group of two away with every agent, rule and group set to it.
 func foundGroups(entries []Entry) []Group {
-	return autoGroups(foundFrom(entries, heldOffEntries()), heldSettings().ModelSameAs)
+	return autoGroups(unskipped(foundFrom(entries, heldOffEntries()), heldOf("file", load).AutoGroupSkip), heldSettings().ModelSameAs)
+}
+
+// unskipped is entries without the models of the providers skip names:
+// those the user keeps out of found groups (AutoGroupSkip).
+func unskipped(entries []Entry, skip []string) []Entry {
+	if len(skip) == 0 {
+		return entries
+	}
+	return slices.DeleteFunc(slices.Clone(entries), func(e Entry) bool { return slices.Contains(skip, e.Provider.ID) })
+}
+
+// AutoGroupSkip are the providers the user keeps out of the groups magpie
+// finds (SetAutoGroupSkip).
+func AutoGroupSkip() []string { return slices.Clone(load().AutoGroupSkip) }
+
+// SetAutoGroupSkip keeps the providers ids names out of the groups magpie
+// finds, and every other back in: none of their models is in a found
+// group, so a model one other provider serves is no group of them. The
+// groups the user made or changed, a found one included, keep them: they
+// are the user's. A request still naming a found group skipping took away
+// goes to its model from one provider (AutoStandIn).
+func SetAutoGroupSkip(ids []string) error {
+	f, err := read()
+	if err != nil {
+		return err
+	}
+	var skip []string
+	for _, id := range ids {
+		id = strings.ToLower(strings.TrimSpace(id))
+		if id != "" && !slices.Contains(skip, id) {
+			skip = append(skip, id)
+		}
+	}
+	if slices.Equal(skip, f.AutoGroupSkip) {
+		return nil
+	}
+	f.AutoGroupSkip = skip
+	return store(f)
 }
 
 // foundFrom is entries with idle's models it lacks, each provider's in
@@ -713,68 +780,25 @@ func autoGroups(entries []Entry, same map[string]string) []Group {
 				g.Name = own(e) // a vendor that names it, over one that only lists its id
 			}
 		}
+		// the name goes with the id agents are given (auto/<Spelled>): the
+		// one models.dev gives that spelling, else, where no vendor names
+		// it, that spelling itself, not the first provider's (XYenon on
+		// Discord: glm-5-3-flash beside auto/glm-5.3-flash). A group the
+		// user changed is stored with their name, never this one.
+		g.Spelled = spelledIn(g, same)
+		if n := catalog.NameOf(g.Spelled); g.Spelled != "" && n != "" {
+			g.Name = n
+		} else if g.Spelled != "" && g.Name == es[0].Model {
+			g.Name = g.Spelled
+		}
 		out = append(out, g)
 	}
 	return out
 }
 
-// sameModel is a model's name as vendors agree on it: lowercase, without
-// the vendor's own prefix ("anthropic/claude-sonnet-5" is claude-sonnet-5,
-// "accounts/fireworks/models/…" too), with a version's dot as Anthropic
-// writes it ("claude-opus-5.5" is claude-opus-5-5, and so is Fireworks'
-// "p" for the dot, "deepseek-v4p1"), a run of spaces, "_" and "-" as one
-// "-" (a relay that lists its display name as the id, "GPT-6 Sol", is
-// gpt-6-sol: Chill on Discord), and without the snapshot
-// date some add: "claude-opus-5-5-20260801", Vertex's "…@20260801", and
-// Volcengine Ark's six digits ("deepseek-v4-1-flash-260910" is
-// deepseek-v4-1-flash, #583). Anything else stays: a variant after ":"
-// (":batch"), -flash, -thinking, and a four-digit release (qwen's -2507,
-// kimi-k2-0905) that is a model of its own. So does OpenAI's dashed date
-// ("gpt-4o-2024-08-06"): a pinned snapshot apart from the alias that
-// moves, and an id that has had a group of its own (auto-gpt-4o-2024-08-06)
-// agents and saved groups name. An id spelt with spaces merges with its
-// dashed spelling, whose group id (Slug's) it had already.
-func sameModel(id string) string {
-	k := strings.ToLower(strings.TrimSpace(id))
-	if i := strings.LastIndex(k, "/"); i >= 0 {
-		k = k[i+1:]
-	}
-	k = strings.Trim(modelGaps.ReplaceAllString(k, "-"), "-")
-	b := []byte(k)
-	for i := 1; i+1 < len(b); i++ {
-		if (b[i] == '.' || b[i] == 'p') && isDigit(b[i-1]) && isDigit(b[i+1]) {
-			b[i] = '-'
-		}
-	}
-	k = string(b)
-	if i := strings.LastIndexAny(k, "-@"); i > 0 && snapshotDate(k[i+1:]) {
-		k = k[:i]
-	}
-	return k
-}
-
-// snapshotDate is whether s is the date a vendor dates a snapshot of a
-// model by: YYYYMMDD from 2000 on, or Ark's YYMMDD from 2023 on, with a
-// month and a day that are one.
-func snapshotDate(s string) bool {
-	if strings.Trim(s, "0123456789") != "" {
-		return false
-	}
-	switch {
-	case len(s) == 8 && strings.HasPrefix(s, "20"):
-		return true
-	case len(s) == 6:
-		yy, mm, dd := atoi2(s[0:2]), atoi2(s[2:4]), atoi2(s[4:6])
-		return yy >= 23 && yy <= 39 && mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31
-	}
-	return false
-}
-
-// modelGaps are what sameModel spells as one "-": a run of spaces (a
-// no-break one too), "_" and "-".
-var modelGaps = regexp.MustCompile(`[\s\p{Zs}_-]+`)
-
-func atoi2(s string) int { return int(s[0]-'0')*10 + int(s[1]-'0') }
+// sameModel is a model's name as vendors agree on it: catalog.SameModel,
+// which says what it keeps and what it folds.
+func sameModel(id string) string { return catalog.SameModel(id) }
 
 func isDigit(c byte) bool { return c >= '0' && c <= '9' }
 
@@ -782,6 +806,46 @@ func isDigit(c byte) bool { return c >= '0' && c <= '9' }
 // its members; one not ready now is left out.
 func FindGroup(id string) (Group, []Member, bool) {
 	return GroupFinder()(id)
+}
+
+// FallbackGroup is the routing group a provider's fallback entry names
+// ("group/<id>", 01huadalang on Discord), as the gateway routes it (Live),
+// with its members ready now. ok is false for an entry naming a model,
+// and for a group removed or switched off: such an entry is passed over.
+func FallbackGroup(id string) (Group, []Member, bool) {
+	if _, ok := GroupIDOf(id); !ok {
+		return Group{}, nil, false
+	}
+	g, ms, ok := FindGroup(id)
+	return g.Live(), ms, ok
+}
+
+// FallbackModels are the models p's fallbacks reach, in order: an entry
+// naming a model, that model as routing reaches it (ResolveRoute); one
+// naming a routing group, the group's members. An entry that reaches
+// nothing is left out, as the gateway passes it over, and a model met
+// again is listed where it was met first.
+func FallbackModels(p Provider) []Member {
+	var out []Member
+	seen := map[string]bool{}
+	add := func(m Member) {
+		if k := m.Provider.ID + "/" + m.Model; !seen[k] {
+			seen[k] = true
+			out = append(out, m)
+		}
+	}
+	for _, id := range p.Fallback {
+		if _, ms, ok := FallbackGroup(id); ok {
+			for _, m := range ms {
+				add(m)
+			}
+			continue
+		}
+		if fp, fm, ok := ResolveRoute(id); ok {
+			add(Member{ID: id, Path: []string{id}, Provider: fp, Model: fm})
+		}
+	}
+	return out
 }
 
 // GroupFor is the group a model's id without a provider in it names, as
@@ -1009,6 +1073,33 @@ func entriesBy(entries []Entry) entryOf {
 	}
 }
 
+// groupSharedKimi gives a group what the providers' lists say of a model
+// (AlwaysThinks, DynamicTools, DefaultEffort) when every member's entry
+// says the same: a group of Kimi Code's models keeps always_thinking and
+// dynamically_loaded_tools in Kimi Code (jiabubu on Discord: one Kimi
+// model put in a group to list it first lost both). One member without it,
+// or one magpie has no entry for, and the group has none: Kimi Code would
+// send a member that can't the request shaped for one that can
+func groupSharedKimi(e *Entry, ms []Member, entries []Entry, find entryOf) {
+	for i, m := range ms {
+		j := find(m.Provider.ID, m.Model)
+		if j < 0 {
+			e.AlwaysThinks, e.DynamicTools, e.DefaultEffort = false, false, ""
+			return
+		}
+		x := &entries[j]
+		if i == 0 {
+			e.AlwaysThinks, e.DynamicTools, e.DefaultEffort = x.AlwaysThinks, x.DynamicTools, x.DefaultEffort
+			continue
+		}
+		e.AlwaysThinks = e.AlwaysThinks && x.AlwaysThinks
+		e.DynamicTools = e.DynamicTools && x.DynamicTools
+		if e.DefaultEffort != x.DefaultEffort {
+			e.DefaultEffort = ""
+		}
+	}
+}
+
 func buildGroupEntries(entries []Entry) []Entry {
 	var out []Entry
 	all := groupsIn(entries)
@@ -1156,6 +1247,7 @@ func buildGroupEntries(entries []Entry) []Entry {
 		// V2 for Ultra only when no member is a ChatGPT account's: a lead
 		// it answers seals its subagents' tasks (#141)
 		e.AgentsV2 = !chatgpt && slices.Contains(e.Efforts, "ultra")
+		groupSharedKimi(&e, ms, entries, find)
 		e.Reasoning = e.Reasoning || len(e.Efforts) > 0
 		if e.ImageInput != nil && !*e.ImageInput {
 			e.Images = false
@@ -1311,6 +1403,23 @@ func SaveGroup(g Group) error {
 	}
 	own := cleanList(g.Members[:named])
 	g.Members = append(slices.Clone(own), slices.DeleteFunc(cleanList(g.Members[named:]), func(m string) bool { return slices.Contains(own, m) })...)
+	// the order the user put them in, a pattern's members among them: as
+	// the caller sends it (the Routing page's editor), or as it was. The
+	// models named go in the order the caller names them, so one added
+	// to a group as read (models+=, the TUI) goes after those named
+	before := g.Placed
+	if len(before) == 0 {
+		if i := slices.IndexFunc(f.Groups, func(x Group) bool { return x.ID == g.ID }); i >= 0 {
+			before = f.Groups[i].Placed
+		}
+	}
+	key := func(m string) string {
+		id, _ := memberFastIn(entries, strings.TrimSpace(m))
+		return cleanMember(entries, id)
+	}
+	if g.Placed = placedOver(g.Members, mapEach(before, key), mapEach(members, key)); g.Placed != nil {
+		own = slices.DeleteFunc(slices.Clone(g.Placed), func(m string) bool { return !slices.Contains(own, m) })
+	}
 	var off []string
 	for _, m := range cleanList(g.Off) {
 		if m = cleanMember(entries, m); slices.Contains(g.Members, m) && !slices.Contains(off, m) {
@@ -1335,7 +1444,7 @@ func SaveGroup(g Group) error {
 	if err := cleanDecisionGroup(&g, groupsIn(entries)); err != nil {
 		return err
 	}
-	if g.Routing != Ordered && g.Routing != Rotate && g.Routing != LeastUsed && g.Routing != Pace && g.Routing != Weighted && g.Routing != FreeFirst && g.Routing != Fastest && g.Routing != Manual && !PluginRouting(g.Routing) {
+	if g.Routing != Ordered && g.Routing != Rotate && g.Routing != LeastUsed && g.Routing != Pace && g.Routing != Weighted && g.Routing != FreeFirst && g.Routing != Fastest && g.Routing != Cheapest && g.Routing != Manual && !PluginRouting(g.Routing) {
 		g.Routing = ""
 	}
 	if !slices.Contains(Affinities, g.Affinity) {
@@ -1723,6 +1832,11 @@ func RenameGroup(from, to string) error {
 		for j, m := range f.Groups[i].Members {
 			if m == old {
 				f.Groups[i].Members[j] = now
+			}
+		}
+		for j, m := range f.Groups[i].Placed {
+			if m == old {
+				f.Groups[i].Placed[j] = now
 			}
 		}
 		for j := range f.Groups[i].Rules {

@@ -72,15 +72,15 @@ func (c *rowChunk) encode(keep func([]byte) bool) ([]byte, []*time.Location) {
 	locs := map[*time.Location]uint64{}
 	for k := range c.Rows {
 		p := &c.Rows[k]
-		loc := p.Time.Location()
+		loc := p.Time().Location()
 		id, ok := locs[loc]
 		if !ok {
 			id = uint64(len(locations))
 			locs[loc] = id
 			locations = append(locations, loc)
 		}
-		put(uint64(p.Time.Unix()))
-		put(uint64(p.Time.Nanosecond()))
+		put(uint64(p.Time().Unix()))
+		put(uint64(p.Time().Nanosecond()))
 		put(id)
 		put(uint64(p.Shape))
 		for _, n := range p.Varied {
@@ -89,7 +89,7 @@ func (c *rowChunk) encode(keep func([]byte) bool) ([]byte, []*time.Location) {
 		for _, n := range p.Tokens {
 			put(uint64(n))
 		}
-		for _, n := range []int64{p.Millis, p.TTFT, p.FirstText, p.Order, p.RouteID, p.Sent, p.Flow, p.Own, p.Retried, p.Queued, p.FirstReasoning} {
+		for _, n := range []int64{int64(p.Millis), int64(p.TTFT), int64(p.FirstText), p.Order, p.RouteID, int64(p.Sent), int64(p.Flow), int64(p.Own), int64(p.Retried), int64(p.Queued), int64(p.FirstReasoning)} {
 			put(uint64(n))
 		}
 		put(math.Float64bits(p.Cost))
@@ -264,7 +264,7 @@ func (c *rowChunk) unpackReusing(dst *rowChunk, into []packedRow, strs []string,
 		if loc >= uint64(len(c.Locations)) {
 			return nil
 		}
-		p.Time = time.Unix(sec, nano).In(c.Locations[loc])
+		p.setTime(time.Unix(sec, nano).In(c.Locations[loc]))
 		p.Shape = uint32(take())
 		if int(p.Shape) >= len(next.Shapes) {
 			return nil
@@ -277,13 +277,13 @@ func (c *rowChunk) unpackReusing(dst *rowChunk, into []packedRow, strs []string,
 			p.Varied[j] = uint32(n)
 		}
 		for j := range p.Tokens {
-			p.Tokens[j] = int64(take())
+			p.Tokens[j] = tokensOf(int64(take()))
 		}
-		p.Millis, p.TTFT, p.FirstText, p.Order = int64(take()), int64(take()), int64(take()), int64(take())
+		p.Millis, p.TTFT, p.FirstText, p.Order = msOf(int64(take())), msOf(int64(take())), msOf(int64(take())), int64(take())
 		p.RouteID = int64(take())
-		p.Sent, p.Flow = int64(take()), int64(take())
-		p.Own, p.Retried, p.Queued = int64(take()), int64(take()), int64(take())
-		p.FirstReasoning = int64(take())
+		p.Sent, p.Flow = msOf(int64(take())), msOf(int64(take()))
+		p.Own, p.Retried, p.Queued = msOf(int64(take())), msOf(int64(take())), msOf(int64(take()))
+		p.FirstReasoning = msOf(int64(take()))
 		p.Cost, p.Status, p.Flags = math.Float64frombits(take()), int32(take()), uint16(take())
 		p.Tries = int32(take())
 		p.Masking = int32(take())

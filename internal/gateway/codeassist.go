@@ -315,6 +315,7 @@ func buildCodeAssist(r *Request, model, agent string) []byte {
 // the request goes out under is the one everything below is shaped from.
 // agent "vertex" is Vertex AI's request (buildVertex).
 func buildCodeAssistSent(r *Request, sent, agent string) []byte {
+	r = responseInstructions(r)
 	ag := agent == "antigravity"
 	vx := agent == "vertex"
 	at := "" // the level the id says it thinks at
@@ -562,9 +563,16 @@ func buildCodeAssistSent(r *Request, sent, agent string) []byte {
 			gen["responseJsonSchema"] = sc
 		}
 	}
-	if catalog.DrawsID(sent) {
-		// an image model draws only when asked for images too
+	if catalog.DrawsID(sent) || r.draws {
+		// an image model draws only when asked for images too: one named
+		// for them, or any asked to draw (a plugin's that says it does)
 		gen["responseModalities"] = []string{"TEXT", "IMAGE"}
+	}
+	if len(r.ImageConfig) > 0 {
+		// the size and shape a Gemini client asked its image drawn at, as
+		// it asked them: left out, the model drew at its default size
+		// (#3820)
+		gen["imageConfig"] = r.ImageConfig
 	}
 	if len(gen) > 0 {
 		req["generationConfig"] = gen
@@ -753,6 +761,14 @@ func thinkingConfig(r *Request, model string, claude bool, at string) map[string
 		}
 		return tc
 	}
+	if off, _, _, ok := vertexBudgets(strings.TrimPrefix(m, "models/")); ok && r.ThinkOff && !claude {
+		// reasoning turned off (a Chat client's effort none, the routing
+		// classifier's ask) goes as 2.5's off budget, as on Vertex AI:
+		// 0 for Flash and Flash-Lite, Pro's least, 128. It went as low's
+		// 4096 (tangtang969 on X: a classifier that doesn't think is
+		// faster)
+		return map[string]any{"thinkingBudget": off}
+	}
 	budget := budgetOf(effortOf(r.Effort))
 	if claude && r.MaxTokens > 0 && budget >= r.MaxTokens {
 		budget = r.MaxTokens - 1
@@ -811,6 +827,18 @@ func plainSchema(raw json.RawMessage) json.RawMessage {
 	var walk func(v any, depth int) any
 	walk = func(v any, depth int) any {
 		switch x := v.(type) {
+		case bool:
+			// a boolean schema, which JSON Schema has wherever a schema
+			// goes: true is any value, the schema {}; false is none, nil,
+			// and whoever holds it leaves it out. Google's Schema is an
+			// object only, and turns the whole request away over a
+			// boolean ("…items.items (…aiplatform.master.Schema), true",
+			// han_tiv on Discord: an MCP tool's array of arrays of
+			// anything)
+			if x {
+				return map[string]any{}
+			}
+			return nil
 		case []any:
 			out := make([]any, len(x))
 			for i, e := range x {
@@ -947,12 +975,23 @@ func plainSchema(raw json.RawMessage) json.RawMessage {
 					props := map[string]any{}
 					if m, ok := v.(map[string]any); ok {
 						for pk, pv := range m {
-							props[pk] = walk(pv, depth+1)
+							// a property whose schema is false is one the
+							// call may not have: it is left out, and so is
+							// its name in required
+							if w := walk(pv, depth+1); w != nil {
+								props[pk] = w
+							}
 						}
 					}
 					out[k] = props
 				case "items":
-					out[k] = walk(v, depth+1)
+					if w := walk(v, depth+1); w != nil {
+						out[k] = w
+					} else if x["maxItems"] == nil {
+						// items false: an array with nothing in it
+						out[k] = map[string]any{}
+						out["maxItems"] = 0
+					}
 				case "enum":
 					// Google takes string enums only
 					if es, ok := v.([]any); ok {

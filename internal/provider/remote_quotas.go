@@ -364,15 +364,15 @@ func askRemote(ctx context.Context, p Provider, method, path string) ([]Subscrip
 
 // signRemote puts on req, a request of magpie's own to the remote magpie
 // p (its cards, a refresh, its quota history, a key's limit), key and p's
-// literal Headers, as its model list and its API requests carry them (Yirasumi on
+// Headers, as its model list and its API requests carry them (Yirasumi on
 // Discord: the Usage page's read of the remote went without the headers a
-// proxy in front of it asks for). Header values keep this branch's literal
-// semantics; no session/thread template expansion is introduced.
+// proxy in front of it asks for). It is no turn of a conversation:
+// ${sessionId} and ${threadId} are an id of its own (conversation.go).
 // The key goes as Authorization: Bearer, which a user's Authorization
 // replaces (a proxy's own scheme), and always as x-api-key (remoteKey).
 func (p Provider) signRemote(req *http.Request, key string) {
 	req.Header.Set("Authorization", "Bearer "+key)
-	for k, v := range p.Headers {
+	for k, v := range p.SentHeaders(context.Background()) {
 		catalog.PutUserHeader(req.Header, k, v)
 	}
 	remoteKey(req.Header, key)

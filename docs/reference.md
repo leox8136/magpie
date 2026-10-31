@@ -129,6 +129,7 @@ line; agents connected to magpie lose it when it quits.
 | Empryo       | `~/.empryo/config.json` | defaultModel (a `magpie` provider at the gateway in `providers`) |
 | Ante         | `~/.ante/catalog.json` and `settings.json` (`$ANTE_HOME`) | provider, model (a `magpie` provider on OpenAiCompatible, with no auth of magpie's: the gateway lets this machine in with any token and Ante counts a provider with none as authenticated; magpie's models in Ante's model picker, and Ante started on magpie, which is what its settings' `provider` decides) |
 | AstrBot      | `data/cmd_config.json` under `$ASTRBOT_ROOT`, else `~/.astrbot` (the desktop app's) | model (a `magpie` entry in `provider_sources` and magpie's models in `provider`, the user's own entries kept; the default chat model in `agent_runner.config.model.provider_id`, or `provider_settings.default_provider_id` on AstrBot before 4.28's agent runner; restart AstrBot after connecting; Docker installs aren't reached) |
+| OpenClaw     | `openclaw.json` in `~/.openclaw` (`$OPENCLAW_CONFIG_PATH`, `$OPENCLAW_STATE_DIR`, `~/.openclaw-<profile>` for `$OPENCLAW_PROFILE`, `~` as `$OPENCLAW_HOME`) | model (a `magpie` provider in `models.providers`, `openai-completions`, with magpie's models in it; `agents.defaults.model`'s primary set to it, what was there put back on Disconnect; `magpie/*` added to a `modelPolicy.allow` that would refuse it; the user's own keys in the provider and its models kept; a chat already on a model keeps it until `/model default`) |
 | jcode        | `config.toml` in `$JCODE_HOME`, else `~/.jcode` | model (a `[providers.magpie]` profile, `openai-compatible`, with magpie's models in it; `[provider] default_provider`/`default_model` set to it, what was there put back on Disconnect; the user's own keys in the profile, such as `headers` and a model's `reasoning_effort`, kept; restart open jcode sessions after connecting) |
 | MiniMax Code (mcode) | `~/.minimax/config.yaml` (`$MINIMAX_DATA_DIR`) | model (a `magpie` custom provider; magpie's models in its /model) |
 | Droid (Factory) | `~/.factory/settings.json` (`$FACTORY_HOME_OVERRIDE`) | model (magpie's models as BYOK `customModels`, in Droid's /model) |
@@ -145,7 +146,7 @@ line; agents connected to magpie lose it when it quits.
 | Kiro Crew    | `~/.kiro/crew/config.json` (`$KIROCREW_HOME`; `config.local.json` over it is left alone) | provider, harness (`agent.acp_backend`, and `agent.member_acp_backend` for a harness that can dispatch: an agent connected to magpie, so its models are magpie's: the one Crew is set to is connected along with it when it isn't yet, and disconnected with it again; the user's value is put back on Disconnect) |
 | OpenPencil   | `openpencil/settings.json` in the config folder: `~/Library/Application Support` (macOS), `$XDG_CONFIG_HOME` or `~/.config` (Linux), `%APPDATA%` (Windows) | provider (a `magpie` entry in its `builtin_agents`, magpie's models in its chat's model picker; the user's entries and settings kept; refused while OpenPencil runs, as it writes the file back when it quits) |
 | NewMax       | `newmax.db` (SQLite, the row `app` of its `settings` table) in `$NEWMAX_USER_DATA_DIR`, else `~/.newmax` (every OS) | provider (a `magpie-gateway` entry in its `providers` and `providerOrder`, magpie's models in its model picker; the rest of the row kept byte for byte; refused while NewMax runs, as it writes its settings back whenever one changes) |
-| T3 Code      | `~/.t3/userdata/settings.json` (`$T3CODE_HOME/userdata`) | provider (a `magpie` provider instance on Claude Code, magpie's models as its custom models) |
+| T3 Code      | `~/.t3/userdata/settings.json` (`$T3CODE_HOME/userdata`) | provider (a `magpie` provider instance on Claude Code, magpie's models as its custom models; a `magpie-codex` instance on Codex, whose `launchArgs` are Codex's own `-c` overrides to magpie and a `magpie-codex-models.json` catalog beside the settings. The harness is picked in T3's model picker) |
 | OpenHanako   | `~/.hanako/provider-catalog.json` + `agents/<id>/config.yaml` (`$HANA_HOME`; its local API while it runs) | model (the primary agent's; magpie's models as a provider) |
 | AtomCode     | `~/.atomcode/config.toml` (`$ATOMCODE_HOME`) | model, effort (a `magpie` provider account, one model table per catalog model as its own sign-in writes) |
 | Snow CLI     | `~/.snow/profiles/magpie.json` (`$SNOW_CONFIG_DIR`), made the active profile and copied to `config.json` | model (the user's other profiles' models too; Snow App takes the profile in with "Sync Snow CLI API config") |
@@ -420,7 +421,9 @@ service tier the client asked for (Claude's fast speed reads `fast`), the
 one that try went out at (a fast pick sends `priority`, or `ultrafast`
 where the pick is set to Ultrafast; Ultrafast becomes
 `priority` on an account whose plan doesn't offer it), and the one the
-vendor's reply said it ran at, empty when the reply doesn't say. The JSON
+vendor's reply said it ran at, empty when the reply doesn't say. The
+ChatGPT backend (Codex signed in with ChatGPT) says `auto` and `default`
+whether Fast ran or not, so from it those are left empty too. The JSON
 log keeps them as `tier_asked`, `tier_sent` and `tier_served`, and each
 try in `/v1/magpie/route` has `tier` and `tier_served`. The last column,
 `upstream_stop`, is why the upstream said its reply ended, in its own
@@ -561,6 +564,10 @@ as an HTTP MCP server; from another computer send a gateway key as
 `Authorization: Bearer <key>`. An image comes back in the tool's answer and
 at a URL on the gateway kept for an hour (the same key reads it), a video at
 `/v1/videos/<id>/content`. With Image generation Off the tool says so.
+`generate_image` and `generate_video` take an optional `model`
+(provider/model, one of those the tool's schema lists, for `magpie tool`
+`--model`). Left out, the one in Settings is used. One that isn't listed, or
+that a gateway key may not use, is refused with the models that may be used.
 
 WorkBuddy (China)'s daily check-in (签到) is pressed from the app's Usage card
 (*Check in now*), `magpie accounts checkin`, or `c` on the TUI's Usage page,
@@ -699,6 +706,14 @@ one as a Remote magpie provider shows each of its keys' limits on its
 Usage page this way (#1547). Requests from
 this computer that send no gateway key are not limited; a gateway key used
 from this computer is.
+
+A key's holder can also open **`/me`** in a browser at the address they
+reach the gateway at (for example `http://192.168.1.10:3999/me`), type
+their key, and see its own limits, its usage over today, 7 and 30 days, the
+models it may use, and copy-ready setup for Claude Code, Codex and any
+OpenAI-compatible client. It shows nothing of other keys, accounts or
+providers. Gateway → Gateway keys shows that address with a Copy button,
+so it can be handed out with the keys.
 
 A gateway key can also be held to some **models** (#882): pick them with the
 **All models** badge on the key's row, or run `magpie gateway-key models <id>
@@ -895,11 +910,23 @@ same model on the Qwen AI platform's pay as you go is `qwen-decision`
 Neither plan has an API for its credits: the console's subscription page
 shows them, so magpie shows no plan usage for these keys.
 
+Qwen Cloud (qwencloud.com), Alibaba's international Qwen platform, has keys
+of its own, made at home.qwencloud.com. Its pay as you go is `qwencloud`,
+at `{region}.maas.qwencloudapi.com` in six regions (`ap-southeast-1`, the
+default, `us-east-1`, `eu-central-1`, `ap-northeast-1`, `cn-hongkong` and
+`cn-beijing`), each region's `sk-ws-` key taken only there. Its Token Plan is
+`qwencloud-token-plan` (`token-plan.maas.qwencloudapi.com`, Singapore only,
+`sk-sp-` keys), with the plan's documented text models. Both serve Chat
+Completions at `/compatible-mode/v1` and Anthropic Messages at
+`/apps/anthropic`.
+
 ### Google Vertex AI
 
 Google Vertex AI (`google-vertex`), which Google's documentation now calls
 Gemini Enterprise Agent Platform, serves Google's Gemini models from your own
-Google Cloud project, which is billed for them. It takes no API key: each
+Google Cloud project, which is billed for them. It serves the
+[partner and open models](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/maas/call-open-model-apis)
+too, such as DeepSeek, GLM and gpt-oss. It takes no API key: each
 request is signed with a token minted from your Google credentials. First turn
 on the Agent Platform API (`aiplatform.googleapis.com`) in the project (billing
 has to be on there), then sign in with `gcloud auth application-default login`
@@ -935,7 +962,7 @@ so magpie gives each location the models it answered with on 2026-10-06
 
 | Location | Models |
 | --- | --- |
-| `global` | `gemini-3.8-flash`, `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-4-argon`, `gemini-3.1-pro-preview`, `gemini-3.1-pro-preview-customtools`, `gemini-3.1-flash-lite`, `gemini-3-flash-preview`, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite` |
+| `global` | `gemini-3.8-flash`, `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-4-argon`, `gemini-3.1-pro-preview`, `gemini-3.1-pro-preview-customtools`, `gemini-3.1-flash-lite`, `gemini-3-flash-preview`, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `deepseek-ai/deepseek-v4.1-flash-maas`, `zai-org/glm-5.2-maas`, `openai/gpt-oss-120b-maas`, `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`, `claude-fable-5-1` |
 | `us`, `eu` | `gemini-3.8-flash`, `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite` |
 | A region | `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite` |
 
@@ -949,6 +976,37 @@ magpie provider models google-vertex all     # back to the location's list
 
 `magpie provider set google-vertex location=…` keeps the models picked, so pick
 again after a move.
+
+A partner model is one whose id names its publisher before a slash, as
+`deepseek-ai/deepseek-v4.1-flash-maas` does. magpie asks it on Google's
+OpenAI-compatible chat completions in your project
+(`…/locations/<location>/endpoints/openapi/chat/completions`) with the same
+credentials, and asks a Gemini model on generateContent, with nothing to set.
+The three in the `global` row are the ones Google's docs list as live there on
+2026-10-28. Another partner model (one in preview, or one Google lists later,
+such as `google/gemma-4-26b-a4b-it-maas`) is typed in under its full id, as
+any model is:
+
+```sh
+magpie provider models google-vertex gemini-3.8-flash deepseek-ai/deepseek-v4.1-flash-maas google/gemma-4-26b-a4b-it-maas
+```
+
+Turn each partner model on for the project in Model Garden first: until then
+Google refuses it. `magpie provider test google-vertex` tests Gemini, and a
+partner model is tested on its own (right-click it in the app, or
+`magpie provider test google-vertex <model>`).
+
+Anthropic's Claude is served too, with nothing more to set: a model whose id
+starts with `claude-` is asked on Anthropic's Messages API in your project
+(`…/locations/<location>/publishers/anthropic/models/<model>:streamRawPredict`,
+`:rawPredict` for one answer whole, `count-tokens:rawPredict` for Claude
+Code's token counts), as Claude Code asks it with `CLAUDE_CODE_USE_VERTEX`.
+Every agent can use it, whatever API it speaks. `global` lists the current
+models under the ids Claude Code gives them for Vertex AI; an older one goes
+under Vertex's id with its date, such as `claude-sonnet-4-5@20250929`, typed
+in as any model is. At another location (`us-east5`, `europe-west1`), type in
+the Claude models it serves. Turn each Claude model on in Model Garden first,
+as a partner model is, and test it on its own.
 
 Google's [Priority PayGo](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/priority-paygo)
 and [Flex PayGo](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/flex-paygo)
@@ -1050,6 +1108,13 @@ OpenCode ignores:
   and the icon the plugin market lists for the plugin is shown instead.
   The `package.json` icon is also the card's picture under Discover →
   Unofficial, on GitHub for a repository tagged `magpie-plugin`.
+- **The plugin's name**: `"magpie": { "name": "…" }` in its `package.json`
+  names its row in Settings → Plugins, and its sidebar tab when its page
+  gives no title, for a plugin the community's list doesn't name (that
+  list's name wins). A package's npm name, which Bun keys it by, has to be
+  ASCII, so this is where a name like 华为云 HUAWEI goes. One line of at
+  most 80 bytes; anything else is ignored. It is the package's own word:
+  never shown as reviewed, and never used to find a plugin by name.
 - **An API key's field**: a `type: "api"` method's `label` titles the key's
   field, as OpenCode's dialog does (one that only says "API key" reads
   "<provider> API key"), and its `placeholder` is the hint inside the field
@@ -1127,6 +1192,11 @@ magpie plugin options model-map off   # clears them
 The name can be a package's short name (`model-map` for
 `@magpie-community/middleware-model-map`). A package's
 `"magpie": { "options": {…} }` is the example the editor starts from.
+A key that a provider plugin declares as a switch for its provider (the
+editor's Plugin options, such as Cursor's `wire_trace`) goes where the
+plugin reads it, beside the switches the editor saves: `magpie plugin
+options cursor '{"wire_trace": true}'` turns it on, and `off` puts every
+switch back to the plugin's default.
 
 Ready-made middleware, under Plugins › Discover › Gateway middleware
 (`@magpie-community/middleware-<name>`), mostly New API's channel settings
@@ -1518,6 +1588,9 @@ one provider serves it.
 `listed=no` (the group editor's **Model lists: The group alone**) keeps the
 models a group names, and those its patterns match, out of `magpie models`,
 `/v1/models` and every agent's list, so a client offers the group alone.
+A signed-in subscription's own models (a ChatGPT, Claude, Copilot or plugin
+account's) stay in every agent's list: the group is added on top of them,
+and only a client that is no agent is given the group alone.
 They are still served: the group routes over them, and a request naming one
 as `provider/model` is answered. A group in it keeps its own setting, and a
 group switched off keeps nothing out. `listed=yes` lists them again. To keep
@@ -1631,6 +1704,11 @@ result for every request: who went first, and why.
    of a window (100% In order). *Stays: Strict* does, and asks no other:
    the conversation stays on its account, resting, spent or past its cap,
    and its errors go to the agent.
+   With *Stays: Session* or *Strict* under Smart, Least used first or
+   Weekly pace, a new conversation goes to the account the fewest other
+   conversations of the last 30 minutes are on (of those not resting and
+   under 90%), so sessions side by side each keep an account of their own;
+   a Claude Code subagent goes with its session's account.
 
 So routing decides who goes first only for a conversation nobody has
 answered yet. An account that has used 90% goes behind the others for new
@@ -1702,6 +1780,20 @@ each of these groups ordered by the share used.
   Replies that aren't streamed tell no speed, and a restart starts the
   measuring over. The Routing page says why the first went first:
   "answered fastest lately — first token in 0.8s, 62 tokens a second".
+- **Cheapest first** (routing groups only): the member whose model costs
+  least now first, by its price a million tokens in and out at the hour of
+  the request, as Usage would count a call made then: the price you set
+  for it, else its list price, at the provider's price rate and rate
+  windows; a model its vendor serves free costs nothing. DeepSeek's own
+  API, and Command Code's and OpenCode Go's DeepSeek models, bill double
+  in their peak hours (weekdays 01:00–04:00 and 06:00–10:00 UTC), so a
+  DeepSeek model on two providers goes to whichever is cheaper at that
+  hour. A tie on that goes to the cheaper cache read; members that still
+  cost the same keep their order, and one with no known price goes after
+  every priced one. For a schedule of your own instead, a rule with a
+  time window sends a member first at its hours, and a Pause rule leaves
+  one out at its hours. The Routing page says why the first went first:
+  "costs least on Ollama now — $0.150 in, $0.600 out a million tokens".
 
 The routings besides Smart are the built-in plugin `rotation` (Routing
 strategies in Plugins › Built-in). It stays on while a provider or group is
@@ -1725,6 +1817,7 @@ depends on the routing:
 | Least used first | Only between accounts with the same share used and the same tokens sent lately. |
 | Weekly pace | Only between accounts in the same pace band that magpie sent the same tokens lately, in practice none since magpie started. |
 | Speed first | Only between those within a tenth of each other's speed, and among those not measured lately. |
+| Cheapest first | Only between those that cost the same now, and among those with no known price. |
 
 For Claude Code and Codex, *Make first* also signs the agent in to that
 account, because the account the agent is signed in to is first. With
@@ -1782,10 +1875,26 @@ in to a minute after it starts and every 5 minutes after: once it has used
 98% of a window (100% In order), or reached its usage cap, magpie signs
 the agent in to the next ticked account, in their order, whose allowance
 is known and under that share. A saved Claude account magpie knows
-nothing of yet (see below) is not moved to. Once the account it moved the
+nothing of yet (see below) is read first. When every other account is
+past that share too, magpie moves the agent to the one with the most room
+left, if it has at least a point more than the account it is on; else the
+agent stays. `magpie accounts switch claude next` (or `codex next`) does
+the same by hand: the next ticked account after the one the agent is on,
+in their order and wrapping round, that has room, or the one with the most
+room left when none has. Once the account it moved the
 agent off has every window under 90% again, it signs the agent back in to
 it. *Keep … signed in to* turns this off: the agent stays on the first
 account, or on the account you picked, whatever it has left. It changes nothing in the gateway's routing.
+
+Removing the account Codex or Claude Code is signed in to (its *Remove*,
+or `magpie accounts forget <codex|claude> <email|name>`) signs the agent
+in to another of its accounts first, as that one's *Use* would, then
+forgets this one; if that switch fails, nothing is removed. Codex's only
+account is signed out instead, as `codex logout` does. Claude Code is
+never signed out: when the account is the only one it can be signed in
+to (an account added by setup-token doesn't count), magpie keeps it and
+says so. Add another account first, or sign out in Claude Code itself,
+then remove it.
 
 With more than one Codex account on, magpie also sets `openai_base_url`
 in Codex's config.toml, so a request the signed-in account has no
@@ -1798,6 +1907,28 @@ Codex app and a running `codex app-server` read the sign-in when they
 start, so one already open stays on its account until it is opened again;
 a new `codex` session takes the new one. Connected to magpie, Codex's
 requests go through it as before.
+
+*Only switch Claude Code's sign-in* under Providers › Claude (or `magpie
+accounts switch-only claude on`) keeps the Claude accounts to Claude
+Code alone, with one account too: magpie still moves Claude Code's own
+sign-in as above, and serves no request on them. They leave the model
+list, and a request that names them, from any agent, a group, a
+fallback or a Claude Code connected to magpie, is refused as kept to
+Claude Code, so no turn runs through Claude Code's SDK mode, which
+spends more of the allowance than Claude Code used on its own (myduso on
+Discord). Their usage is still read and shown.
+
+**Switch accounts only.** To use magpie only to switch Claude Code (or
+Codex) between your accounts, leave it not connected on Agents and sign
+your accounts in under Providers › Claude Code. Its row on Agents then
+shows the account it is signed in to; click it, and the *Switch accounts
+only* menu signs Claude Code in to another of them, with *Only switch
+Claude Code's sign-in* and *Manage accounts…* beside. The button says
+*Switched*, and a new Claude Code session uses the new account; one
+already open keeps its account until it is started again. The tray panel
+has it too: set a key under Settings › General › Quick panel shortcut, press
+it from any app, open Claude Code's (or Codex's) row and click its
+*account* line.
 
 **How often an allowance is read.** Routing uses what was read last and
 never waits for a reading, except the first one after magpie starts (3
@@ -1892,7 +2023,15 @@ file from the old one there. The files are only read. An account
 magpie has already is left as it is, two Team seats of one email stay two
 accounts, and an entry with only an access token (a ChatGPT web session)
 is refused, since it would stop working within days with nothing to renew
-it.
+it. For Claude it takes Claude Code's `.credentials.json`, CLIProxyAPI's
+auth files and claude-swap's export (`cswap --export <file>`, format 1;
+an encrypted one is decrypted first, and an API-key account is added as a
+key instead). A Claude sign-in is kept as the file has it, magpie asking
+Anthropic nothing, with its organization, and a cswap alias becomes the
+account's name in magpie when it has none and the name picks no other
+account. Claude Code renews it the first time it runs on it, and the
+file's copy stops working then: remove the account from cswap (`cswap
+--remove-account`) rather than switch to it there again.
 
 ### Connecting anything else
 
@@ -1981,14 +2120,30 @@ It exposes:
 | Path                     | API                        |
 | ------------------------ | -------------------------- |
 | `/v1/chat/completions`   | OpenAI chat completions    |
-| `/v1/responses`          | OpenAI Responses (HTTP, streamed as SSE; a WebSocket upgrade is answered 426) |
+| `/v1/responses`          | OpenAI Responses (HTTP, streamed as SSE, or a WebSocket as Codex speaks it) |
 | `/v1/messages`           | Anthropic Messages         |
 | `/v1/messages/count_tokens` | Anthropic token counting |
 | `/v1beta/models/{model}:generateContent` | Google Gemini (also `:streamGenerateContent`, `:countTokens`) |
 | `/v1/audio/transcriptions`, `/v1/audio/translations` | OpenAI speech to text (multipart, passed through) |
+| `/v1/audio/speech`       | OpenAI text to speech (JSON in, the vendor's audio or SSE streamed back) |
 | `/v1/models`, `/v1beta/models` | the catalog            |
 | `/v1/codex/models`       | the catalog as Codex's `model_catalog_url` reads it ([Codex on another computer](#providers-and-the-gateway)) |
 | `/api/version`, `/api/tags`, `/api/show` | the catalog as an Ollama server lists it, for a client that takes a custom endpoint only as Ollama (below) |
+| `/mcp/magpie/hub` | MCP (Streamable HTTP): every MCP server in the Library, as one server, for any app, while *Library → MCP → MCP router* is on |
+| `/mcp/magpie/hub/{agent}` | MCP (Streamable HTTP): the Library's MCP servers ticked for that agent, as one server, while *Library → MCP → MCP router* is on |
+
+With that switch on, each agent that takes an MCP server over HTTP is
+given one entry, `magpie`, in place of the Library's servers, and magpie
+runs those servers itself, once for every agent: a command is started on
+its first call and ended after 10 minutes with none. Each tool is named
+`<server>__<tool>`, and a tool turned off in the Library isn't listed. An
+agent that reaches no server over HTTP (Claude Desktop), or has an entry
+called `magpie` of its own, keeps each server's own entry, and the page
+says so. An agent in WSL or on another computer is given the address it
+reaches magpie at, with its key. Turning the switch off gives every agent
+each server's own entry again. It is guarded as the gateway is: a local
+request, or one with a gateway key, and no other web page
+([MCP router](subsystems/mcp-router.md)).
 
 Each `/v1/models` entry includes `reasoning` and `supported_reasoning_levels`
 (`[{"effort":"low"}, ...]`), and the same levels as plain names in
@@ -2034,7 +2189,19 @@ models are named `provider/model`.
   provider's own id, and a `prompt` masked as your redaction settings say.
   The answer comes back in the vendor's own format (`json`, `text`, `srt`,
   `vtt`). A provider with no OpenAI-style API is refused; one that has no
-  such endpoint answers its own 404. Text to speech is not served.
+  such endpoint answers its own 404.
+- Text to speech (`/v1/audio/speech`) takes OpenAI's JSON body
+  (`model`, `input`, `voice`, `response_format`, `speed`, `instructions`,
+  `stream_format`), its `model` a magpie id such as
+  `openai/gpt-4o-mini-tts` or `groq/playai-tts`. The body goes to that
+  provider's OpenAI-style base with only the model set to the provider's
+  own id; any other field (Mistral's `voice_id`) goes as sent. The answer
+  is passed on as it comes, in the vendor's own type: audio (`mp3`,
+  `opus`, `aac`, `flac`, `wav`, `pcm`), SSE for `stream_format: "sse"`,
+  or the vendor's own JSON (Mistral answers `{"audio_data": base64}`).
+  `input` and `instructions` are masked as your redaction settings say;
+  the answer is audio, so a masked value is read aloud as its
+  placeholder.
 - Every reply names who answered in `X-Magpie-Provider` (the provider)
   and `X-Magpie-Model` (`provider/model`), and so does the usage log.
 
@@ -2173,6 +2340,24 @@ without a console of its own, and print what it says. The same goes for
 a `data` folder beside it) records no path, and a copy moved since its
 last start leaves the old one: run the program where it is, such as
 `& "$HOME\Downloads\magpie-windows-amd64.exe" goroutines | Out-Host`.
+
+`magpie log [--path] [-n N] [-f]` says where magpie's logs are. The app
+(its window, the menu bar or tray icon and the panel, opened from the
+Finder, the Dock, the Start menu or a terminal) writes what it logs to
+`app.log` as well as to stderr: `~/Library/Logs/magpie/app.log` on macOS,
+`%LOCALAPPDATA%\magpie\logs\app.log` on Windows,
+`$XDG_STATE_HOME/magpie/app.log` (`~/.local/state/magpie/app.log`) on Linux
+and the BSDs, and `logs/app.log` in a portable magpie's data folder. A
+panic's trace goes there too. At 5 MiB it becomes `app.old.log`, over the
+one before, so two files are kept at most. The file is readable by your
+user only, and what looks like a key or token is masked in it, though
+nothing magpie logs is meant to carry one. Settings › About › Log has its
+path and an Open that shows its folder. `magpie log` prints its path, the
+older file when there is one, the service's log when `magpie daemon` is
+installed and the log of a gateway `magpie tui` left running; `--path`
+prints the app's alone, `-n N` its last N lines and `-f` follows it,
+across a rotation, until Ctrl+C. `magpie serve`, `magpie web` and the TUI
+write no `app.log`: their log is the terminal's, or the service's.
 
 A gateway key held to a budget, concurrency, some models or some accounts is told
 none of this magpie's accounts (#1981): `/v1/magpie/quotas`,
@@ -2333,7 +2518,12 @@ name in its provider's editor, or `magpie accounts alias <agent> <email>
 <name>` (`--clear` takes it off). The name is magpie's, kept in
 providers.json; the vendor's or plugin's sign-in is never written to. It
 shows on the account's Usage card, in the menu bar, in `magpie accounts`,
-`magpie quota` and `GET /v1/magpie/quotas` (`alias`). A GLM Coding Plan
+`magpie quota` and `GET /v1/magpie/quotas` (`alias`). The name picks the
+account wherever its email does: `magpie accounts switch claude Work`,
+`forget`, `alias`, `provider pool <id> --accounts` and `provider
+account-cap`. magpie refuses a name two accounts have, or one that is
+another account's email, rather than pick one by guess; `next` after
+`switch` is always the next account (see above). A GLM Coding Plan
 seat added both as a key and as a signed-in ZCode account is shown once, on
 the account's card (two cards would count its allowance twice); that card
 is then named for the key's provider until you name it yourself, and says
@@ -2463,12 +2653,27 @@ with a link builder: <https://usemagpie.ai/docs/import>.
 
 Download the app for macOS, Windows or Linux from
 [usemagpie.ai](https://usemagpie.ai), or install it from a terminal (on
-Linux, the desktop app when WebKitGTK 4.1 is installed, the command
-otherwise):
+Linux, the desktop app when GTK 3 and WebKitGTK 4.1 are installed, the
+terminal build otherwise):
 
 ```sh
 curl -fsSL https://usemagpie.ai/install.sh | sh
 ```
+
+On Linux the installer asks nothing. A computer with a desktop (a
+graphical session, the user's graphical login when run over ssh, or a
+desktop installed in `xsessions` / `wayland-sessions`) but without the
+app's libraries gets the terminal build, and the installer ends with the
+command that installs them on that distribution (`sudo apt install
+libwebkit2gtk-4.1-0` on Debian and Ubuntu, `sudo dnf install
+webkit2gtk4.1` on Fedora, `sudo pacman -S --needed webkit2gtk-4.1` on
+Arch, `sudo zypper install libwebkit2gtk-4_1-0` on openSUSE); run it again
+afterwards for the app. `--gui` installs the app at once, before its
+libraries; `--tui` (or `MAGPIE_CLI=1`) installs the terminal build on a
+desktop too. The libraries are looked up with `ldconfig -p`, in `/sbin`
+as well, since a Debian user's `PATH` doesn't have it, and in the usual
+library folders where there is no cache. On musl (Alpine) it is always the
+terminal build.
 
 Behind a firewall, or without access to GitHub, both the installer and
 `magpie update` take `--proxy <url>` (http, https, socks5, socks5h; or
@@ -2599,7 +2804,8 @@ port is free.
   told so; run `magpie serve` under the manager it has.
 - **macOS:** a launch agent, `~/Library/LaunchAgents/com.yetone.magpie.serve.plist`,
   loaded with `launchctl bootstrap gui/$UID`. Its log:
-  `~/Library/Logs/magpie/serve.log`.
+  `~/Library/Logs/magpie/serve.log`, beside the app's own `app.log`
+  (`magpie log`).
 - **Windows:** not a service; `magpie autostart on` opens magpie, which
   serves the gateway, when you log in. Inside WSL, `magpie daemon` works as
   on Linux.
@@ -2916,6 +3122,13 @@ The file is sealed on your machine with the passphrase, so the server only
 ever stores ciphertext. Each machine writes only over the version it read (a
 conditional write), so an update that another machine made in between is
 merged rather than lost.
+
+A change to an agent's model (or any of its fields) on one machine reaches
+the others. When sync changes one on a machine and you set it back there,
+that machine keeps its own: the other machines' picks no longer change it
+there, and its picks stay there, while everything else keeps syncing.
+Settings → Sync lists those fields under **Kept on this computer**, and
+**Follow the others** takes the synced value again.
 
 ```sh
 magpie webdav on https://dav.jianguoyun.com/dav/ user=me@example.com

@@ -133,9 +133,9 @@ func claudeDesktop(home string) *Agent {
 		},
 		Notice: func() string {
 			if desktopWiredAny(ps) {
-				return noticeClaudedesktop1.String()
+				return noticeClaudedesktop1.String() + " " + noticeClaudedesktop3.String()
 			}
-			return noticeClaudedesktop2.String()
+			return noticeClaudedesktop2.String() + " " + noticeClaudedesktop4.String()
 		},
 		Check: func() string {
 			if !desktopWiredAny(ps) {
@@ -177,6 +177,14 @@ func claudeDesktop(home string) *Agent {
 				// its Code tab is Claude Code, told what Desktop's ids for
 				// magpie's models can do while that one runs on magpie
 				_ = claude(home).Sync()
+				// and a running distro's, which a Code tab session with
+				// WSL as its host runs on (a stopped one is written on
+				// the round after it starts)
+				for _, a := range wslAgents() {
+					if strings.HasPrefix(a.ID, "claude@wsl:") && a.Sync != nil {
+						_ = a.Sync()
+					}
+				}
 				return nil
 			},
 			Options: func(map[string]string) []Option {
@@ -251,10 +259,20 @@ func desktopCheck(p desktopPaths) string {
 	want := agentKey("claude-desktop")
 	return wiringOff("Claude Desktop", prof, func(k string) (string, bool) {
 		v, ok := edit.GetJSON(prof, k)
-		if k == "inferenceGatewayApiKey" && prof != p.prof && desktopKeyTaken(v, want) {
+		if k != "inferenceGatewayApiKey" {
+			return v, ok
+		}
+		// Desktop seals the key at rest (desktopOpen): the one it opens
+		// to is the one it sends; one magpie can't open is unknown, and
+		// not said to be changed
+		open, known := desktopOpen(k, v)
+		if !known {
+			return want, true
+		}
+		if prof != p.prof && desktopKeyTaken(open, want) {
 			return want, true // a key of magpie's other than Desktop's own
 		}
-		return v, ok
+		return open, ok
 	}, "inferenceGatewayBaseUrl", gateway.URL(), "inferenceGatewayApiKey", want)
 }
 
@@ -298,7 +316,8 @@ func desktopAppliedGateway(p desktopPaths) string {
 // desktopKeyApplied gives the profile desktopAppliedGateway finds the
 // key magpie gives Desktop, only where the one it holds is a key this
 // gateway won't take (another magpie's, from the computer it was exported
-// on): one it takes stays. Its address and every other setting, its
+// on): one it takes stays, and so does one Desktop sealed that magpie
+// can't open (desktopOpen). Its address and every other setting, its
 // connectors among them, stay as they are.
 func desktopKeyApplied(p desktopPaths) error {
 	f := desktopAppliedGateway(p)
@@ -306,7 +325,9 @@ func desktopKeyApplied(p desktopPaths) error {
 		return nil
 	}
 	want := agentKey("claude-desktop")
-	if v, _ := edit.GetJSON(f, "inferenceGatewayApiKey"); desktopKeyTaken(v, want) {
+	v, _ := edit.GetJSON(f, "inferenceGatewayApiKey")
+	// a key Desktop sealed that magpie can't open is left as it is
+	if open, known := desktopOpen("inferenceGatewayApiKey", v); !known || desktopKeyTaken(open, want) {
 		return nil
 	}
 	kvs := []edit.KV{{Path: "inferenceGatewayApiKey", Value: want}}
@@ -318,8 +339,10 @@ func desktopKeyApplied(p desktopPaths) error {
 
 // desktopTierFields pick the model each of Claude Code's tiers runs on in
 // Desktop's Code tab, its subagents' sonnet, haiku or opus among them
-// (gateway.DesktopTiers). Unset, a Claude model magpie serves stands in for
-// its own tier, else the chat's model does. Desktop reads them from the
+// (gateway.DesktopTiers). Unset, the chat's model runs it, or, for a chat
+// on a Claude model, its provider's model of the tier: another provider's
+// Claude model, or a Claude model beside a chat on another vendor's, is
+// never used unpicked. Desktop reads them from the
 // gateway's /v1/models when it starts.
 func desktopTierFields(ps []desktopPaths) []Field {
 	var fields []Field
@@ -984,4 +1007,11 @@ func desktopEmpty(b []byte) bool {
 var (
 	noticeClaudedesktop1 = newNotice("Claude Desktop reads this at start-up — quit and reopen it to run on magpie (Code and Cowork, no Anthropic sign-in).")
 	noticeClaudedesktop2 = newNotice("Claude Desktop reads this at start-up — quit and reopen it to sign in with Anthropic again.")
+	// Desktop's 3p mode runs in a userData of its own (Claude-3p, chosen in
+	// its main process before the window opens), so the chats, projects and
+	// Code sessions of the Anthropic sign-in in Claude/ aren't shown there.
+	// magpie never touches Claude/'s data; off brings them back
+	// (xgddm88 on X: 之前的工程和会话记录全没了).
+	noticeClaudedesktop3 = newNotice("Chats and projects from your Anthropic sign-in stay in Desktop's own profile, not shown on magpie; nothing is deleted, and turning this off brings them back.")
+	noticeClaudedesktop4 = newNotice("Your chats and projects from before are back there.")
 )

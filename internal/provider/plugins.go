@@ -123,6 +123,18 @@ func (p Provider) PluginProvider() string {
 	return p.Account.plugin.ID
 }
 
+// OpenAIBase is where p takes the OpenAI-shaped requests that are no chat
+// (embeddings, rerank, speech, transcriptions): its Chat base, and a
+// plugin's fetch under plugin://<id>/v1 whatever API its chat models are
+// spoken on, for the plugin to answer or put in its vendor's shape
+// (XYenon's Google AI Studio plugin: Gemini's embedContent, its TTS).
+func (p Provider) OpenAIBase() string {
+	if p.IsPlugin() {
+		return pluginBase + p.Account.plugin.ID + "/v1"
+	}
+	return p.Base(Chat)
+}
+
 // PluginOpenAICompatible is whether p is a plugin's provider that speaks
 // model on an OpenAI-compatible API (@ai-sdk/openai-compatible), whose
 // other routes, the images API among them, its fetch sends under the same
@@ -254,6 +266,9 @@ func pluginTierOn(provider string, m plugin.Model, tier string) bool {
 func pluginCatalog(pp plugin.Provider) []catalog.Model {
 	out := make([]catalog.Model, 0, len(pp.Models))
 	for _, m := range pp.Models {
+		if !pluginTalks(m) {
+			continue
+		}
 		c := catalog.Model{
 			ID: m.ID, Name: m.Name, Provider: pp.ID, Released: m.Released,
 			APIs: []string{string(pluginProtocol(pp.ID, m))}, Images: m.Image,
@@ -317,6 +332,20 @@ func pluginCatalog(pp plugin.Provider) []catalog.Model {
 		out = append(out, c)
 	}
 	return out
+}
+
+// pluginTalks is whether m is a model to talk with, as its plugin says
+// what it gives: one that gives text, or images or videos (whose place is
+// #2792's to decide, a drawing model kept where it is until then), or one
+// said nothing of. An embedding ({"text": false}) and a TTS (audio alone)
+// are not, and stay out of every chat list, as the catalog's own lists
+// leave them out (textModel), #3279. Nothing is guessed from its id: a
+// plugin that says nothing of its outputs keeps every model it lists.
+func pluginTalks(m plugin.Model) bool {
+	if !m.OutputsSaid {
+		return true
+	}
+	return slices.ContainsFunc(m.Outputs, func(k string) bool { return k == "text" || k == "image" || k == "video" })
 }
 
 // pluginPrice is m's price as its plugin gives it (m.Cost), if it gives
@@ -594,11 +623,10 @@ func pluginFetch(pp plugin.Provider, account string, req *http.Request) (*http.R
 	if err != nil {
 		return nil, err
 	}
-	base := firstOf(o.BaseURL, m.URL, pp.API, npmBase[m.NPM])
+	base := pluginRequestBase(pp, m, o.BaseURL)
 	if base == "" {
 		return nil, errors.New(pp.Name + "'s plugin says nowhere to send its requests")
 	}
-	base = strings.TrimRight(base, "/")
 	var url string
 	switch {
 	case codeAssist:
@@ -632,6 +660,29 @@ func pluginFetch(pp plugin.Provider, account string, req *http.Request) (*http.R
 		notePluginSignIn(pp, account, resp)
 	}
 	return resp, err
+}
+
+// pluginRequestBase is the base URL a plugin provider's request for m goes
+// under: the loader's (else the model's, the provider's, the AI SDK
+// package's), with no slash at its end.
+//
+// A loader's base is the provider's, said once for all its models, and an
+// Anthropic model may be served under /v1 of it: Copilot's loader says
+// https://api.githubcopilot.com, while its Claude models are on
+// /v1/messages (models.dev's api.url .../v1; OpenCode's own Copilot
+// provider sends them to the loader's base + "/v1"). Sent to the bare base
+// they went to /messages and Copilot answered 404 (cyoking1 on X). So an
+// Anthropic model whose own URL ends in /v1 is sent under the loader's
+// base + /v1, when that base doesn't end in it already.
+func pluginRequestBase(pp plugin.Provider, m plugin.Model, loader string) string {
+	base := strings.TrimRight(firstOf(loader, m.URL, pp.API, npmBase[m.NPM]), "/")
+	if base == "" || loader == "" || pluginProtocol(pp.ID, m) != Anthropic {
+		return base
+	}
+	if strings.HasSuffix(strings.TrimRight(m.URL, "/"), "/v1") && !strings.HasSuffix(base, "/v1") {
+		base += "/v1"
+	}
+	return base
 }
 
 // SignInHeader is how a plugin says what its answer means for the

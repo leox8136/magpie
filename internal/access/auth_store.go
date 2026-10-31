@@ -20,6 +20,7 @@ type authStore struct {
 	info   os.FileInfo
 	change time.Time
 	digest [32]byte
+	byID   map[string]Key
 	keys   map[[32]byte]Key
 	lan    bool
 }
@@ -40,13 +41,16 @@ func indexedStore(path string, b []byte, keys []Key) *authStore {
 			keys = persisted
 		}
 	}
-	s := &authStore{path: path, digest: sha256.Sum256(b), keys: make(map[[32]byte]Key, len(keys))}
+	s := &authStore{path: path, digest: sha256.Sum256(b), keys: make(map[[32]byte]Key, len(keys)), byID: make(map[string]Key, len(keys))}
 	for _, k := range keys {
 		hash := sha256.Sum256([]byte(k.Secret))
 		if _, exists := s.keys[hash]; !exists {
 			id := keyIdentity(k)
 			k.Limit, k.More, k.Models, k.Accounts, k.Concurrency = id.Limit, id.More, id.Models, id.Accounts, id.Concurrency
 			s.keys[hash] = k
+		}
+		if _, exists := s.byID[k.ID]; !exists {
+			s.byID[k.ID] = k
 		}
 		s.lan = s.lan || k.LAN
 	}
@@ -109,14 +113,14 @@ func authenticationStore() (*authStore, error) {
 		old = prepared
 	}
 	if old != nil && old.path == path && old.digest == digest {
-		s.keys, s.lan = old.keys, old.lan
+		s.keys, s.byID, s.lan = old.keys, old.byID, old.lan
 	} else {
 		var keys []Key
 		if err := json.Unmarshal(b, &keys); err != nil {
 			return nil, err
 		}
 		indexed := indexedStore(path, b, keys)
-		s.keys, s.lan = indexed.keys, indexed.lan
+		s.keys, s.byID, s.lan = indexed.keys, indexed.byID, indexed.lan
 	}
 
 	authSnapshot.Store(s)

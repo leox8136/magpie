@@ -2,8 +2,10 @@ package gui
 
 import (
 	"math"
+	"runtime"
 	"runtime/debug"
 	"testing"
+	"time"
 )
 
 func gcPercent() int {
@@ -34,35 +36,14 @@ func TestUnderTightGC(t *testing.T) {
 	}
 }
 
-// Under it the memory Go holds is limited to what it held when the read
-// began, and the limit set before is put back; a lower limit the user set
-// is kept, and GOGC off gets none.
-func TestUnderTightGCLimitsMemory(t *testing.T) {
-	defer debug.SetGCPercent(debug.SetGCPercent(100))
+// Under it no memory limit is set: the warm-up's read held at what Go
+// held when it began collected every ~160 ms for 13 s of a cold start.
+func TestUnderTightGCSetsNoMemoryLimit(t *testing.T) {
 	defer debug.SetMemoryLimit(debug.SetMemoryLimit(math.MaxInt64))
-	for _, c := range []struct {
-		name   string
-		gogc   int
-		before int64
-		low    bool
-	}{
-		{"default", 100, math.MaxInt64, true},
-		{"user limit lower", 100, 1 << 20, false},
-		{"GOGC off", -1, math.MaxInt64, false},
-	} {
-		debug.SetGCPercent(c.gogc)
-		debug.SetMemoryLimit(c.before)
-		var during int64
-		underTightGC(func() { during = debug.SetMemoryLimit(-1) })
-		if c.low && during >= c.before {
-			t.Errorf("%s: read under limit %d, want what Go held", c.name, during)
-		}
-		if !c.low && during != c.before {
-			t.Errorf("%s: read under limit %d, want %d kept", c.name, during, c.before)
-		}
-		if after := debug.SetMemoryLimit(-1); after != c.before {
-			t.Errorf("%s: after the read the limit is %d, want %d", c.name, after, c.before)
-		}
+	var during int64
+	underTightGC(func() { during = debug.SetMemoryLimit(-1) })
+	if during != math.MaxInt64 {
+		t.Errorf("read under limit %d, want none", during)
 	}
 }
 
@@ -73,8 +54,8 @@ func TestTightGCOverlappingReads(t *testing.T) {
 	defer debug.SetGCPercent(debug.SetGCPercent(100))
 	defer debug.SetMemoryLimit(debug.SetMemoryLimit(math.MaxInt64))
 	for _, firstEndsFirst := range []bool{true, false} {
-		first := tightenGC(true)
-		second := tightenGC(false)
+		first := tightenGC()
+		second := tightenGC()
 		if p := gcPercent(); p != tightGCPercent {
 			t.Fatalf("two reads under GOGC=%d, want %d", p, tightGCPercent)
 		}
@@ -105,5 +86,60 @@ func TestWarmUpTightensOnlyTheUsageRead(t *testing.T) {
 	warmUp(func() { during = gcPercent() })
 	if during != 100 {
 		t.Fatalf("a warm-up step read under GOGC=%d, want 100", during)
+	}
+}
+
+// TestTightPercentLeavesRoom: a tight GC on a small heap lets it grow by
+// tightGCRoom, not a tenth, which on a first start collected ~28 times a
+// second (#2278); a large heap is held to a tenth, and a lower or off
+// GOGC is kept.
+func TestTightPercentLeavesRoom(t *testing.T) {
+	room := tightGCRoom
+	tightGCRoom = 32 << 20
+	defer func() { tightGCRoom = room }()
+	for _, c := range []struct {
+		live int64
+		was  int
+		want int
+	}{
+		{50 << 20, 100, 64},
+		{8 << 20, 100, 100},
+		{8 << 20, 300, 300},
+		{320 << 20, 100, tightGCPercent},
+		{2 << 30, 100, tightGCPercent},
+		{50 << 20, 5, 5},
+		{50 << 20, -1, -1},
+		{0, 100, tightGCPercent},
+	} {
+		if got := tightPercent(c.live, c.was); got != c.want {
+			t.Errorf("tightPercent(%d MB, %d) = %d, want %d", c.live>>20, c.was, got, c.want)
+		}
+	}
+}
+
+// TestTightGCRetunesAfterACollection: while a read is under a tight GC,
+// each collection sets GOGC for the heap it left, and once the read ends
+// GOGC is what it was before.
+func TestTightGCRetunesAfterACollection(t *testing.T) {
+	room := tightGCRoom
+	tightGCRoom = 1 << 40
+	defer func() { tightGCRoom = room }()
+	before := debug.SetGCPercent(100)
+	defer debug.SetGCPercent(before)
+	undo := tightenGC()
+	if got := gcPercent(); got != tightGCPercent {
+		t.Fatalf("GOGC before a collection = %d, want %d", got, tightGCPercent)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for gcPercent() != 100 {
+		if time.Now().After(deadline) {
+			t.Fatalf("GOGC after collections = %d, want 100 for a heap far under the room", gcPercent())
+		}
+		runtime.GC()
+		time.Sleep(time.Millisecond)
+	}
+	undo()
+	if got := gcPercent(); got != 100 {
+		t.Fatalf("GOGC after the read = %d, want 100", got)
 	}
 }

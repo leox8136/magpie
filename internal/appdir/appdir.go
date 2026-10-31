@@ -265,14 +265,72 @@ func Cache() string {
 	return filepath.Join(mustHome(), ".cache", "magpie")
 }
 
+// Logs is the folder the desktop app writes its log in, where each system
+// keeps an app's logs: ~/Library/Logs/magpie on a Mac (beside the launch
+// agent's serve.log, `magpie daemon install`), %LOCALAPPDATA%\magpie\logs
+// on Windows, and $XDG_STATE_HOME/magpie (~/.local/state/magpie) elsewhere;
+// portable, data/logs. A user asked for magpie's log finds it there
+// (rayem1w on X: the app opened from the Finder had written none).
+func Logs() string {
+	return logsOn(runtime.GOOS)
+}
+
+// logsOn is Logs as it is on goos, for tests of every system's folder.
+func logsOn(goos string) string {
+	if p := Portable(); p != "" {
+		return filepath.Join(p, "logs")
+	}
+	switch goos {
+	case "darwin":
+		return filepath.Join(mustHome(), "Library", "Logs", "magpie")
+	case "windows":
+		local := os.Getenv("LOCALAPPDATA")
+		if !rooted(local) {
+			local = filepath.Join(mustHome(), "AppData", "Local")
+		}
+		return filepath.Join(local, "magpie", "logs")
+	}
+	if x := os.Getenv("XDG_STATE_HOME"); rooted(x) {
+		return filepath.Join(x, "magpie")
+	}
+	return filepath.Join(mustHome(), ".local", "state", "magpie")
+}
+
 // WebView is the folder the Windows webview (WebView2) keeps its profile
 // in — its cache, cookies and the pages' storage — or "" for its own
 // default. Installed, that default is %APPDATA%\<exe name>, as it always
 // was, so nothing kept there is lost; portable, it is data\webview2, so a
 // portable magpie leaves no magpie.exe folder in the user's AppData (#508).
+// A Windows magpie installed from a download under another name
+// (update.Settle) keeps the profile it had there: the WebViewNote beside
+// it names that folder.
 func WebView() string {
 	if p := Portable(); p != "" {
 		return filepath.Join(p, "webview2")
+	}
+	if runtime.GOOS != "windows" {
+		return ""
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return noted(filepath.Join(filepath.Dir(exe), WebViewNote))
+}
+
+// WebViewNote is the file beside an installed Windows magpie naming the
+// webview profile it keeps, the one it had where it was downloaded.
+const WebViewNote = "webview-profile"
+
+// noted is the absolute folder the note at path names, "" when there is
+// no such note.
+func noted(path string) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	if p := strings.TrimSpace(string(b)); filepath.IsAbs(p) {
+		return p
 	}
 	return ""
 }

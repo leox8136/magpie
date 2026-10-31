@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -38,7 +39,7 @@ func (f *headerPeer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // Yirasumi on Discord: a Remote magpie behind a proxy that asks for a
 // header of its own answered the chat, but the Usage page's read of its
 // cards went without the provider's Headers. Every request magpie makes
-// to a remote magpie now carries them, static header values unchanged,
+// to a remote magpie now carries them, ${sessionId} as an id of its own,
 // and the key still reaches the remote as x-api-key: a user's
 // Authorization (the proxy's) goes on in place of magpie's Bearer, and a
 // user's x-api-key never replaces the key.
@@ -51,7 +52,7 @@ func TestRemoteMagpieRequestsCarryHeaders(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			p.Headers = map[string]string{"X-Proxy-Token": "tok", "X-Session": "static-session", "x-API-key": "not-the-key"}
+			p.Headers = map[string]string{"X-Proxy-Token": "tok", "X-Session": "${sessionId}", "X-Api-Key": "not-the-key"}
 			if userAuth {
 				p.Headers["Authorization"] = "Basic cHJveHk6cHc="
 			}
@@ -80,6 +81,7 @@ func TestRemoteMagpieRequestsCarryHeaders(t *testing.T) {
 			}
 			res.Body.Close()
 
+			own := regexp.MustCompile(`^magpie-[a-z0-9]{12}$`)
 			peer.Lock()
 			defer peer.Unlock()
 			for _, path := range []string{
@@ -96,8 +98,8 @@ func TestRemoteMagpieRequestsCarryHeaders(t *testing.T) {
 					if h.Get("X-Proxy-Token") != "tok" {
 						t.Errorf("%s: X-Proxy-Token %q", path, h.Get("X-Proxy-Token"))
 					}
-					if s := h.Get("X-Session"); s != "static-session" {
-						t.Errorf("%s: X-Session %q, want literal configured value", path, s)
+					if s := h.Get("X-Session"); !own.MatchString(s) {
+						t.Errorf("%s: X-Session %q, want an id of its own", path, s)
 					}
 					if v := h.Values("X-Api-Key"); len(v) != 1 || !strings.HasPrefix(v[0], "sk-magpie-") {
 						t.Errorf("%s: x-api-key %q, want magpie's key", path, v)

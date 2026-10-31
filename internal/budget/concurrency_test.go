@@ -6,11 +6,8 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/access"
-	"github.com/yetone/magpie/internal/testenv"
 	"github.com/yetone/magpie/internal/usage"
 )
-
-func TestMain(m *testing.M) { testenv.Main(m) }
 
 type heldLedger struct{ entered, resume chan struct{} }
 

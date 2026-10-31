@@ -71,7 +71,11 @@ func (s *Server) retryTokenField(ctx context.Context, p provider.Provider, to pr
 		return res, nil
 	}
 	sent := deepseekTokenField(p, to, body)
-	sent = p.WithExtraBody(sent, cmp.Or(sessionOf(in), conversationID(in, sent)))
+	conv := provider.Conversation{Session: cmp.Or(sessionOf(in), conversationID(in, sent)), Subagent: subOf(in)}
+	if p.AsksThread() {
+		conv.Thread = threadOf(in, sent)
+	}
+	sent = p.WithExtraBody(sent, conv)
 	sent = s.chatTokenField(p, to, sent)
 	next, ok := provider.WithTokenField(sent, want)
 	if !ok {
