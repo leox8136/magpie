@@ -462,8 +462,36 @@ func (rs *responsesSocket) keep(t heldTurn) {
 	}
 }
 
-// turn serves one response.create.
+type socketDispatchKey struct{}
+
+type socketDispatch struct {
+	serve func(http.ResponseWriter, *http.Request, http.Handler)
+}
+
+func socketTurnGuard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if turn, ok := r.Context().Value(socketDispatchKey{}).(*socketDispatch); ok {
+			turn.serve(w, r, next)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (rs *responsesSocket) turn(ctx context.Context, t *socketTurnRun, frame []byte) {
+	out := &socketTurnWriter{rs: rs, ctx: ctx, run: t, h: http.Header{}}
+	dispatch := &socketDispatch{serve: func(w http.ResponseWriter, r *http.Request, next http.Handler) {
+		rs.serveTurn(ctx, t, frame, w, r, next)
+	}}
+	req := rs.request(context.WithValue(ctx, socketDispatchKey{}, dispatch), frame)
+	rs.o.via.ServeHTTP(out, req)
+	if out.status != 0 {
+		out.finish()
+	}
+}
+
+// serveTurn prepares a turn after the request guards have admitted it.
+func (rs *responsesSocket) serveTurn(ctx context.Context, t *socketTurnRun, frame []byte, w http.ResponseWriter, req *http.Request, next http.Handler) {
 	rs.frames++
 	rs.got += int64(len(frame))
 	var q map[string]json.RawMessage
@@ -492,6 +520,9 @@ func (rs *responsesSocket) turn(ctx context.Context, t *socketTurnRun, frame []b
 		}
 		input = append(prior[:len(prior):len(prior)], fresh...)
 		rs.continued++
+	}
+	if !admitConversation(w, req, frame, len(q["input"]), input) {
+		return
 	}
 	// a warmup (generate false) asks for no reply: Codex sends it with
 	// the conversation ahead of its first turn, and that turn follows it
@@ -522,23 +553,23 @@ func (rs *responsesSocket) turn(ctx context.Context, t *socketTurnRun, frame []b
 	delete(q, "type")
 	delete(q, "previous_response_id")
 	delete(q, "generate")
-	in, err := json.Marshal(input)
+	in, err := marshalPlain(input)
 	if err != nil {
 		t.endReply()
 		rs.writeError(ctx, http.StatusBadRequest, "invalid_request_error", "invalid_value", err.Error(), "input")
 		return
 	}
 	q["input"] = in
-	body, err := json.Marshal(q)
+	body, err := marshalPlain(q)
 	if err != nil {
 		t.endReply()
 		rs.writeError(ctx, http.StatusBadRequest, "invalid_request_error", "invalid_json", err.Error(), "")
 		return
 	}
 	rs.sent += int64(len(body))
-	req := rs.request(ctx, body)
+	keepRequestBody(req, body)
 	out := &socketTurnWriter{rs: rs, ctx: ctx, run: t, h: http.Header{}}
-	rs.o.via.ServeHTTP(out, req)
+	next.ServeHTTP(out, req)
 	out.finish()
 	if ctx.Err() != nil {
 		return

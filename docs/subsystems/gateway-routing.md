@@ -811,8 +811,8 @@ why (`access.Refused`, "the gateway key "sandbox-1" expired at …: ask for a
 new one") on every route, from loopback too (`identifyCaller`): a sandbox on
 this computer whose restricted key ran out would otherwise be let on as a
 request with no key, which may use everything. Whether a connection already open
-when the key expires (a Responses WebSocket) is refused at its next turn is
-untested. An expired key is kept an hour for
+when the key expires (a Responses WebSocket) is judged again at each turn,
+including a `generate: false` warmup. An expired key is kept an hour for
 that message, then `access.Prune` removes it (every 10 minutes while the
 gateway serves, and on each issue), with the keys of an issuer that is
 gone. A supplied managed key (`sk-magpie-key-`) that is disabled, removed,
@@ -1716,7 +1716,9 @@ serves it on `/v1/responses`, `/responses` and the Codex backend's
   false`.
 - `generate: false` (Codex's warmup) is answered locally with a
   `response.created` and `response.completed` of its own id; nothing is
-  sent upstream.
+  sent upstream. It first passes the same per-turn identity, read-only,
+  Origin/Host and caller-concurrency guards as generation, and memory admission;
+  it does not reserve a model budget because no model is asked.
 - `response.interrupt` naming the reply in flight cancels its request and
   is answered `response.interrupt.accepted`, then an interrupted
   `response.incomplete`; one naming another reply, or none in flight,
@@ -1726,7 +1728,9 @@ serves it on `/v1/responses`, `/responses` and the Codex backend's
   may arrive immediately; it waits only for that finished turn's cleanup.
   Frames are read incrementally through `readSizedRoom`, acquiring shared
   `bodyRoom` capacity before buffer growth. No room gives 503 and closes the
-  receive; interrupt frames remain small and readable.
+  receive; interrupt frames remain small and readable. History expansion also
+  acquires room before constructing the whole request, and budgets see that
+  expanded body.
 - An upstream cut the gateway tells as `response.failed` goes back as
   that frame, and the reply isn't kept; a stream that still ends with no
   terminal event closes the socket 1011, as an HTTP stream would be cut
